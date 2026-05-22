@@ -1,0 +1,15 @@
+evaluation:
+  # 待评估的预测结果文件列表（可配置多个）
+  result_files:
+    - name: "Qwen3.5-9B (thinking)"
+      path: "../data/AggreFact-CNN/contrast_results/gpt_5.4_tk.parquet"
+
+  # 列名配置
+  columns:
+    label_col: "label"        # 真实标签列
+    pred_col: "pred_label"    # 预测标签列（0=不支持, 1=支持, 2=解析失败）
+
+  # 输出配置
+  output:
+    print_confusion_matrix: true   # 是否打印混淆矩阵
+    print_per_class_recall: true   # 是否打印各类别 Recall

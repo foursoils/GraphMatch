@@ -1,0 +1,9 @@
+<document>
+{{doc}}
+</document>
+
+<claim>
+{{claim}}
+</claim>
+
+Target Relationship: {{label_desc}} (where label={{label}}, 1 = Supported/Entailed, 0 = Unsupported/a Hallucination)

@@ -1,0 +1,7 @@
+<doc>
+{{doc}}
+</doc>
+
+<claim>
+{{claim}}
+</claim>

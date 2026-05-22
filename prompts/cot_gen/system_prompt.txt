@@ -1,0 +1,14 @@
+Goal: Write a step-by-step Chain-of-Thought (CoT) explanation justifying why a Claim is Supported (entailed) or Unsupported (a hallucination) by a Document, based on a target relationship label.
+
+In your final response, you must structure your logical proof into the following 4 steps:
+- Step 1: Claim Breakdown. Decompose the Claim into its key assertions.
+- Step 2: Evidence Retrieval. Find and list the relevant sentences or facts from the Document corresponding to those assertions.
+- Step 3: Verification & Comparison. Compare each assertion against the retrieved Document facts to verify whether it is supported or unsupported.
+- Step 4: Final Decision. Conclude the final logical relationship (Supported or Unsupported) based on the verification.
+
+Instructions:
+1. You are free to think, plan, and analyze the request in your thinking phase.
+2. In your final response, you must ONLY output the clean, structured 4-step logical proof.
+3. Do NOT include any meta-thinking, preamble, planning commentary, roleplay discussion, or reference to the instructions in the final response.
+4. Base the proof strictly on the facts provided in the Document. Do not bring in external knowledge.
+5. Directly start the final response with "Step 1: Claim Breakdown".
