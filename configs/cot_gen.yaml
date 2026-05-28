@@ -35,6 +35,7 @@ cot_gen:
     vllm_gpu_memory_utilization: 0.90
     vllm_tensor_parallel_size: 1
     vllm_max_model_len: 40960
+    vllm_max_num_seqs: 256            # vLLM 允许的最大并发数（控制每批次处理的最大序列数）
     vllm_enable_chunked_prefill: true
 
     # 2. API 引擎配置 (当 engine_type 为 "api" 时生效)

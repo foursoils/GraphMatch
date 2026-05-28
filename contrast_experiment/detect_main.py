@@ -208,7 +208,9 @@ def main():
 
     # ---- 遍历数据集 ----
     for dataset_name in datasets:
-        input_path  = os.path.join(data_root, dataset_name, INPUT_SUBDIR, INPUT_FILE)
+        # minicheck 特殊处理，读取 test.parquet
+        input_file = "test.parquet" if dataset_name.lower() == "minicheck" else INPUT_FILE
+        input_path  = os.path.join(data_root, dataset_name, INPUT_SUBDIR, input_file)
         output_path = os.path.join(output_root, dataset_name, "contrast_results", output_filename)
 
         if not os.path.exists(input_path):

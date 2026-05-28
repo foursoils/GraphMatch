@@ -1,8 +1,32 @@
 evaluation:
-  # 待评估的预测结果文件列表（可配置多个）
-  result_files:
-    - name: "Qwen3.5-9B (thinking)"
-      path: "../data/AggreFact-CNN/contrast_results/gpt_5.4_tk.parquet"
+  # 数据根目录
+  data_root: "../data"
+  
+  # 结果子目录，可以是单个字符串或列表（例如 contrast_results, ablation_results）
+  result_dirs:
+    - contrast_results
+    # - ablation_results
+
+  # 需要评估的数据集列表
+  datasets:
+    - AggreFact-CNN
+    - COVID-Fact
+    - AggreFact-XSum
+    - ExpertQA
+    # - Reveal
+    - SCIFACT
+    - pubhealth
+    - summeval
+    - minicheck
+
+  # 需要评估的模型/方法列表（对应文件名，不含 .parquet 后缀）
+  models:
+    # - gpt_5.4_tk
+    - qwen3.5_2b_tk
+    # - claude_4.6_tk
+    # - deberta-v3-base
+    # - gemma_31b_tk
+    # - glm_5_tk
 
   # 列名配置
   columns:
@@ -11,5 +35,6 @@ evaluation:
 
   # 输出配置
   output:
+    print_detail: true             # 是否打印每个组合的详细指标（如混淆矩阵等）
     print_confusion_matrix: true   # 是否打印混淆矩阵
     print_per_class_recall: true   # 是否打印各类别 Recall

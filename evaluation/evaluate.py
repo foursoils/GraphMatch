@@ -94,66 +94,118 @@ def main():
     config_path = args.config or resolve_path("configs/evaluation.yaml")
     config = load_config(config_path)
 
+    # 读取核心配置项
+    data_root_raw = config.get('data_root', '../data')
+    data_root = resolve_path(data_root_raw)
+
+    # 结果子目录处理：支持单个字符串或列表形式
+    res_dirs_raw = config.get('result_dirs', [])
+    if not res_dirs_raw:
+        res_dir = config.get('result_dir', 'contrast_results')
+        res_dirs = [res_dir] if isinstance(res_dir, str) else res_dir
+    else:
+        res_dirs = [res_dirs_raw] if isinstance(res_dirs_raw, str) else res_dirs_raw
+
+    datasets = config.get('datasets', [])
+    models = config.get('models', [])
+
+    if not datasets:
+        print("  [Error] 配置文件中未指定 'datasets' 数据集。")
+        return
+    if not models:
+        print("  [Error] 配置文件中未指定 'models' 待评估模型。")
+        return
+
     label_col = config['columns'].get('label_col', 'label')
     pred_col  = config['columns'].get('pred_col', 'pred_label')
-    print_cm  = config['output'].get('print_confusion_matrix', True)
-    print_pcr = config['output'].get('print_per_class_recall', True)
+    
+    print_detail = config['output'].get('print_detail', True)
+    print_cm     = config['output'].get('print_confusion_matrix', True)
+    print_pcr    = config['output'].get('print_per_class_recall', True)
 
-    result_files = config['result_files']
     summary_rows = []
 
-    for entry in result_files:
-        name = entry['name']
-        path = resolve_path(entry['path'])
+    for dataset in datasets:
+        for res_dir in res_dirs:
+            for model in models:
+                filename = f"{model}.parquet"
+                path = os.path.join(data_root, dataset, res_dir, filename)
 
-        print(f"\n{'='*60}")
-        print(f"  模型/文件: {name}")
-        print(f"  路径:      {path}")
-        print(f"{'='*60}")
+                if not os.path.exists(path):
+                    print(f"  [Info] 跳过不存在的路径: {dataset} / {res_dir} / {model}.parquet")
+                    continue
 
-        if not os.path.exists(path):
-            print(f"  [Error] 文件不存在，跳过。")
-            continue
+                name = f"{dataset} / {res_dir} / {model}"
 
-        df = pd.read_parquet(path)
-        total = len(df)
-        parse_fail = int((df[pred_col] == 2).sum())
+                if print_detail:
+                    print(f"\n{'='*60}")
+                    print(f"  评估对象: {name}")
+                    print(f"  路径:     {path}")
+                    print(f"{'='*60}")
 
-        print(f"  总样本数:   {total}")
-        print(f"  解析失败数: {parse_fail} ({parse_fail/total*100:.1f}%)")
+                df = pd.read_parquet(path)
+                total = len(df)
+                parse_fail = int((df[pred_col] == 2).sum())
 
-        y_true = df[label_col].values.astype(int)
-        y_pred = df[pred_col].values.astype(int)
+                if print_detail:
+                    print(f"  总样本数:   {total}")
+                    print(f"  解析失败数: {parse_fail} ({parse_fail/total*100:.1f}%)")
 
-        metrics = compute_bacc(y_true, y_pred)
+                y_true = df[label_col].values.astype(int)
+                y_pred = df[pred_col].values.astype(int)
 
-        if print_cm:
-            print()
-            print_confusion_matrix(metrics['TP'], metrics['TN'], metrics['FP'], metrics['FN'])
+                metrics = compute_bacc(y_true, y_pred)
 
-        print()
-        if print_pcr:
-            print(f"  TPR (Recall pos=1): {metrics['TPR (Recall 1)']:.4f}")
-            print(f"  TNR (Recall neg=0): {metrics['TNR (Recall 0)']:.4f}")
+                if print_detail:
+                    if print_cm:
+                        print()
+                        print_confusion_matrix(metrics['TP'], metrics['TN'], metrics['FP'], metrics['FN'])
 
-        print(f"\n  ★ BAcc = 1/2 × (TPR + TNR) = {metrics['BAcc']:.4f}")
+                    print()
+                    if print_pcr:
+                        print(f"  TPR (Recall pos=1): {metrics['TPR (Recall 1)']:.4f}")
+                        print(f"  TNR (Recall neg=0): {metrics['TNR (Recall 0)']:.4f}")
 
-        summary_rows.append({
-            "Name":        name,
-            "Total":       total,
-            "ParseFail":   parse_fail,
-            "TPR":         round(metrics['TPR (Recall 1)'], 4),
-            "TNR":         round(metrics['TNR (Recall 0)'], 4),
-            "BAcc":        round(metrics['BAcc'], 4),
-        })
+                    print(f"\n  ★ BAcc = 1/2 × (TPR + TNR) = {metrics['BAcc']:.4f}")
+
+                summary_rows.append({
+                    "Dataset":     dataset,
+                    "Model":       model,
+                    "ResultDir":   res_dir,
+                    "Total":       total,
+                    "ParseFail":   parse_fail,
+                    "TPR":         round(metrics['TPR (Recall 1)'], 4),
+                    "TNR":         round(metrics['TNR (Recall 0)'], 4),
+                    "BAcc":        round(metrics['BAcc'], 4),
+                })
 
     # 汇总表格
-    if len(summary_rows) > 1:
-        print(f"\n{'='*60}")
-        print("  汇总")
-        print(f"{'='*60}")
-        summary_df = pd.DataFrame(summary_rows)
-        print(summary_df.to_string(index=False))
+    if not summary_rows:
+        print("\n  [Warning] 没有找到任何匹配的评估数据文件，请检查您的配置文件。")
+        return
+
+    print(f"\n{'='*80}")
+    print("  评估结果汇总")
+    print(f"{'='*80}")
+    summary_df = pd.DataFrame(summary_rows)
+    print(summary_df.to_string(index=False))
+
+    # 二维汇总矩阵 (BAcc)
+    if len(summary_df['Dataset'].unique()) > 1 or len(summary_df['Model'].unique()) > 1:
+        try:
+            has_multiple_dirs = len(summary_df['ResultDir'].unique()) > 1
+            index_cols = ['Model', 'ResultDir'] if has_multiple_dirs else 'Model'
+
+            pivot_df = summary_df.pivot(index=index_cols, columns='Dataset', values='BAcc')
+            pivot_df['Average'] = pivot_df.mean(axis=1)
+            pivot_df = pivot_df.round(4)
+
+            print(f"\n{'='*80}")
+            print("  平衡准确率 (BAcc) 汇总矩阵")
+            print(f"{'='*80}")
+            print(pivot_df.to_string())
+        except Exception as e:
+            pass
 
 
 if __name__ == '__main__':

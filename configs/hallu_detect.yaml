@@ -5,7 +5,7 @@ hallu_detect:
     # 结果输出根目录（相对于项目根目录），每个数据集结果保存在各自子目录下
     output_root: "../data"
     # 自定义输出的 parquet 文件名
-    output_filename: "gpt_5.4_tk.parquet"
+    output_filename: "qwen3.5_2b_tk.parquet"
     # 需要处理的数据集列表（与 data/ 下子目录名一致）
     datasets:
       - AggreFact-CNN
@@ -14,7 +14,7 @@ hallu_detect:
       - ExpertQA
       # - Reveal
       - SCIFACT
-      # - minicheck
+      - minicheck
       - pubhealth
       - summeval
 
@@ -27,13 +27,14 @@ hallu_detect:
     enable_thinking: true
 
   inference:
-    engine_type: "api" # "vllm" | "api" | "nli"
+    engine_type: "vllm" # "vllm" | "api" | "nli"
 
     # vLLM 参数（engine_type="vllm" 时生效）
-    vllm_model_path: "../models/llms/gemma-4-E2B-it"
+    vllm_model_path: "../models/llms/Qwen3.5-2B"
     vllm_gpu_memory_utilization: 0.92
     vllm_tensor_parallel_size: 1
     vllm_max_model_len: 40960
+    vllm_max_num_seqs: 96            # vLLM 允许的最大并发数（控制每批次处理的最大序列数）
     vllm_enable_chunked_prefill: true
 
     # API 参数（engine_type="api" 时生效）

@@ -45,7 +45,11 @@ class VLLMEngine:
         tp_size = vllm_cfg.get('vllm_tensor_parallel_size') or config.get('inference', {}).get('vllm_tensor_parallel_size', 1)
         max_model_len = vllm_cfg.get('vllm_max_model_len') or config.get('inference', {}).get('vllm_max_model_len', None)
         max_num_seqs = vllm_cfg.get('vllm_max_num_seqs') or config.get('inference', {}).get('vllm_max_num_seqs', None)
+        if max_num_seqs is not None:
+            max_num_seqs = int(max_num_seqs)
         enable_chunked_prefill = vllm_cfg.get('vllm_enable_chunked_prefill') or config.get('inference', {}).get('vllm_enable_chunked_prefill', False)
+        
+        print(f"[vLLM] 正在加载模型: {model_path} (max_num_seqs={max_num_seqs}, gpu_mem={gpu_mem}, tp_size={tp_size})")
         
         self.llm = LLM(
             model=model_path,
