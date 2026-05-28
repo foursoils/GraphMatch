@@ -357,14 +357,18 @@ def train():
                 no_improve = 0
                 unwrapped_model = accelerator.unwrap_model(model)
                 ckpt = {
-                    'epoch':        epoch,
-                    'val_bacc':     bacc,
-                    'train_loss':   avg_loss,
-                    'gmn':          unwrapped_model.gmn.state_dict(),
-                    'projector':    unwrapped_model.projector.state_dict(),
-                    'cross_attn':   unwrapped_model.cross_attn_layer.state_dict(),
-                    'gmn_cls_head': unwrapped_model.gmn_cls_head.state_dict(),
-                }
+                        'epoch':        epoch,
+                        'val_bacc':     bacc,
+                        'train_loss':   avg_loss,
+                        'gmn':          unwrapped_model.gmn.state_dict(),
+                        'projector':    unwrapped_model.projector.state_dict(),
+                        'cross_attn':   unwrapped_model.cross_attn_layer.state_dict(),
+                        'gmn_cls_head': unwrapped_model.gmn_cls_head.state_dict(),
+                        # 宏观通路组件
+                        'W_graph':      unwrapped_model.W_graph.state_dict(),
+                        'gamma':        unwrapped_model.gamma.data,
+                        'macro_proj':   unwrapped_model.macro_proj.state_dict(),
+                    }
                 # LoRA adapter 单独保存
                 try:
                     unwrapped_model.llm.save_pretrained(os.path.join(output_dir, 'lora_adapter'))

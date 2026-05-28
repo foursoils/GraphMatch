@@ -1,38 +1,47 @@
 """
-graph_match_llm - 模型模块
-===========================
-架构（路线 B：中间层 Cross-Attention 注入）：
+graph_match_llm - 模型模块（宏观-微观协同纠偏双重注入架构）
+=============================================================
+架构（Macro-Micro Collaborative Correction）：
 
-  ┌─ Qwen3.5-4B (LoRA 微调) ─────────────────────────────────────┐
+  ┌─ Qwen3.5-4B (LoRA 微调，仅第 inject_layer 层及以后) ──────────┐
   │  Embedding                                                   │
-  │  Layer 0 → 1 → ... → Layer k-1                              │
-  │  Layer k  [full_attention] ──► + Cross-Attn(Q=text, KV=图节点)│  ← 注入点
-  │  Layer k+1 → ... → Layer 31                                  │
+  │  Layer 0 → 1 → ... → Layer k-1  （全部参数冻结）              │
+  │  Layer k  [self-attn]                                        │
+  │    ├── Macro: A_new += γ·Unsqueeze(b_graph)                  │  ← 通路一：全局偏置注入
+  │    └── Micro: H_out = H + tanh(α)·CrossAttn(H, 节点KV)       │  ← 通路二：门控交叉注意力
+  │  Layer k+1 → ... → Layer 31  （LoRA 可训练）                  │
   │  LM Head → 生成 CoT + "Therefore the answer is: Yes/No"       │
   └───────────────────────────────────────────────────────────────┘
-                                          ▲
-                         ┌──── GNN ────────┘
-                         │  claim 图节点 [N_c, D]
-                         │  doc   图节点 [N_d, D]
-                         │  concat → [N_c+N_d, D]
-                         │  → Projector → [N_c+N_d, llm_hidden]
-                         └────────────────────────────────────────
+                         ▲
+          ┌───── GMN ─────┘
+          │  claim 图 G_c  ──┐
+          │                  ├→ 跨图对齐 → node_c, node_d, g1, g2
+          │  doc   图 G_d  ──┘
+          │  Macro: Δh_G = g1 - g2 → b_graph = Δh_G·W_graph  [B, H_heads]
+          │  Micro: nodes = [node_c; node_d] → Projector → [B,N,D_llm]
+          └──────────────────────────────────────────────────────
 
 可训练参数：
-  - LLM LoRA adapter（q/k/v/o_proj）
-  - GNN 编码器（全量）
-  - GraphCrossAttnLayer（全量，插入到第 inject_layer 层之后）
+  - GMN 编码器（全量）
   - Projector（全量）
+  - W_graph, gamma（宏观通路投影层与缩放标量）
+  - macro_proj（H_heads → D_llm 零初始化残差投影）
+  - GraphCrossAttnLayer（全量，含零初始化门控 α）
+  - gmn_cls_head（辅助分类头）
+  - LLM LoRA adapter（仅第 inject_layer 层及以后的 q/k/v/o_proj）
 
 冻结参数：
-  - LLM 其余权重
+  - LLM 第 0 ~ inject_layer-1 层所有参数（包括 LoRA 旁路）
+  - LLM 第 inject_layer 层及以后的非 LoRA 原始权重
 """
 
 import os
+import re
 import sys
 import contextlib
 import torch
 import torch.nn as nn
+from torch_geometric.nn import global_mean_pool
 from torch_geometric.utils import scatter
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -69,17 +78,21 @@ class GraphProjector(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# 中间层 Cross-Attention 模块
+# 通路二（微观）：门控交叉注意力注入模块
 # ---------------------------------------------------------------------------
 
 class GraphCrossAttnLayer(nn.Module):
     """
-    在 LLM 某一层之后插入的 Cross-Attention 模块。
+    在 LLM 指定层之后（FFN 之前）插入的门控交叉注意力层（Micro-Level 注入）。
 
-    Query  = 文本隐状态 h  [B, L, D_llm]
-    Key/V  = 图节点嵌入   [B, N_graph, D_llm]（已由 Projector 投影）
+    Query  = 经自注意力校准后的文本隐状态 H_llm  [B, L, D_llm]
+    Key/V  = GMN 节点嵌入（经 Projector 投影）   [B, N, D_llm]
 
-    输出 = LayerNorm(h + cross_attn(h, graph_nodes))
+    门控公式（零初始化，训练初期稳定）：
+        Context = Softmax(Q_l · K_g^T / √D) · V_g
+        H_out   = H_llm + tanh(α) · Context
+
+    α 显式初始化为 0，训练中自适应放大。
     """
 
     def __init__(self, llm_dim: int, num_heads: int, dropout: float = 0.1):
@@ -92,12 +105,14 @@ class GraphCrossAttnLayer(nn.Module):
         )
         self.norm    = nn.LayerNorm(llm_dim)
         self.dropout = nn.Dropout(dropout)
+        # 零初始化门控标量 α，训练初期无扰动，随训练推进自适应开放
+        self.gate_alpha = nn.Parameter(torch.zeros(1))
 
     def forward(
         self,
-        hidden_states: torch.Tensor,     # [B, L, D]
-        graph_embeds:  torch.Tensor,     # [B, N, D]
-        key_padding_mask: torch.Tensor = None,  # [B, N] True=padding
+        hidden_states: torch.Tensor,              # [B, L, D_llm]
+        graph_embeds:  torch.Tensor,              # [B, N, D_llm]
+        key_padding_mask: torch.Tensor = None,    # [B, N] True=padding
     ) -> torch.Tensor:
         attn_out, _ = self.cross_attn(
             query=hidden_states,
@@ -105,7 +120,8 @@ class GraphCrossAttnLayer(nn.Module):
             value=graph_embeds,
             key_padding_mask=key_padding_mask,
         )
-        return self.norm(hidden_states + self.dropout(attn_out))
+        gate = torch.tanh(self.gate_alpha)
+        return self.norm(hidden_states + gate * self.dropout(attn_out))
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +188,8 @@ class LLMGraphModel(nn.Module):
             device_map=device_map,
         )
 
-        # ---- LoRA ----
+        # ---- LoRA（仅挂载到第 inject_layer 层及以后）----
+        _inject_layer = model_cfg.get('inject_layer', 16)
         if _PEFT_AVAILABLE:
             lora_config = LoraConfig(
                 task_type=TaskType.CAUSAL_LM,
@@ -183,11 +200,24 @@ class LLMGraphModel(nn.Module):
                 bias="none",
             )
             llm = get_peft_model(llm, lora_config)
-            print("[Init] LoRA 已应用。")
+            # 冻结第 0 ~ inject_layer-1 层的 LoRA 参数
+            # 论文设计：只对第 inject_layer 层及以后的 self-attn/FFN 挂载可训练 LoRA
+            frozen_lora = 0
+            for name, param in llm.named_parameters():
+                if 'lora_' in name:
+                    m = re.search(r'\.layers\.(\d+)\.', name)
+                    if m and int(m.group(1)) < _inject_layer:
+                        param.requires_grad_(False)
+                        frozen_lora += 1
+            print(f"[Init] LoRA 已应用（冻结前 {_inject_layer} 层的 LoRA，共 {frozen_lora} 个参数组）。")
             llm.print_trainable_parameters()
         else:
-            # 没有 peft 时全量微调（仅调试用）
-            print("[Init] 无 LoRA，LLM 全量可训练（仅调试）。")
+            # 没有 peft 时，冻结前 inject_layer 层，后层全量可训练（仅调试用）
+            for name, param in llm.named_parameters():
+                m = re.search(r'\.layers\.(\d+)\.', name)
+                if not m or int(m.group(1)) < _inject_layer:
+                    param.requires_grad_(False)
+            print(f"[Init] 无 LoRA，LLM 第 {_inject_layer} 层及以后全量可训练（仅调试）。")
 
         self.llm = llm
 
@@ -224,7 +254,17 @@ class LLMGraphModel(nn.Module):
             nn.Linear(gmn_dim, 2),
         ).to(_dev)
 
-        # ---- Cross-Attention 注入层 ----
+        # ---- 通路一（宏观）：全局自注意力偏置注入组件 ----
+        # W_graph: D_gmn → H_heads，将图级差异向量投影到多头注意力空间
+        self.W_graph = nn.Linear(gmn_dim, self.cross_attn_heads, bias=False).to(_dev)
+        # γ：可学习缩放标量，控制宏观偏置的注入强度
+        self.gamma = nn.Parameter(torch.tensor(0.1, device=_dev))
+        # macro_proj：H_heads → D_llm，将注意力空间偏置映射回隐空间以做残差融合
+        # 零初始化保证训练初期不破坏 LLM 原有表征
+        self.macro_proj = nn.Linear(self.cross_attn_heads, llm_dim, bias=False).to(_dev)
+        nn.init.zeros_(self.macro_proj.weight)
+
+        # ---- 通路二（微观）：门控交叉注意力注入层 ----
         self.cross_attn_layer = GraphCrossAttnLayer(
             llm_dim=llm_dim,
             num_heads=self.cross_attn_heads,
@@ -232,7 +272,8 @@ class LLMGraphModel(nn.Module):
         ).to(_dev)
 
         # ---- 注册 forward hook 到指定层 ----
-        self._graph_kv: torch.Tensor = None   # 暂存图节点嵌入（hook 内访问）
+        self._graph_kv: torch.Tensor = None    # 暂存微观节点嵌入（hook 内访问）
+        self._delta_h_g: torch.Tensor = None   # 暂存宏观图级差异向量（hook 内访问）
         self._hook_handle = None
         self._register_inject_hook()
 
@@ -270,7 +311,11 @@ class LLMGraphModel(nn.Module):
         raise RuntimeError("无法找到 LLM transformer layers，请检查模型结构。")
 
     def _register_inject_hook(self):
-        """在第 inject_layer 层注册 forward hook，完成 Cross-Attention 注入。"""
+        """
+        在第 inject_layer 层注册 forward hook，实现宏观-微观双重注入：
+          - 通路一（宏观）：将 Δh_G 投影到注意力空间，以残差形式注入隐状态
+          - 通路二（微观）：门控交叉注意力，精准对齐节点级实体特征
+        """
         layers = self._get_transformer_layers()
         k = min(self.inject_layer, len(layers) - 1)
 
@@ -281,19 +326,30 @@ class LLMGraphModel(nn.Module):
             else:
                 hidden = output
 
-            if self._graph_kv is None:
-                return output  # 图还没编码，跳过（推理前会设好）
+            # ---- 通路二（微观）：门控交叉注意力 ----
+            # H_out = H_llm + tanh(α) · Context
+            if self._graph_kv is not None:
+                graph_kv = self._graph_kv.to(hidden.device, hidden.dtype)
+                injected = self.cross_attn_layer(hidden, graph_kv)
+            else:
+                injected = hidden
 
-            # graph_kv: [B, N, D]；需要与 hidden 同设备/dtype
-            graph_kv = self._graph_kv.to(hidden.device, hidden.dtype)
-            injected = self.cross_attn_layer(hidden, graph_kv)
+            # ---- 通路一（宏观）：全局图级差异向量注入 ----
+            # b_graph = Δh_G · W_graph  ∈ R^{B × H_heads}
+            # macro_signal = γ · macro_proj(b_graph)  ∈ R^{B × D_llm}
+            # 广播后以残差形式叠加到所有 Token 的隐状态上
+            if self._delta_h_g is not None:
+                delta = self._delta_h_g.to(hidden.device, hidden.dtype)
+                b_graph = self.W_graph(delta)                          # [B, H_heads]
+                macro_signal = self.gamma * self.macro_proj(b_graph)   # [B, D_llm]
+                injected = injected + macro_signal.unsqueeze(1)        # broadcast [B, L, D_llm]
 
             if isinstance(output, tuple):
                 return (injected,) + output[1:]
             return injected
 
         self._hook_handle = layers[k].register_forward_hook(_hook)
-        print(f"[Init] Cross-Attention hook 已注册到 Layer {k}。")
+        print(f"[Init] 双重注入 hook 已注册到 Layer {k}（宏观偏置 + 微观门控交叉注意力）。")
 
     # -----------------------------------------------------------------------
     # 图编码
@@ -302,6 +358,10 @@ class LLMGraphModel(nn.Module):
     def _encode_graphs(self, data: dict):
         """
         GMN 编码 claim/doc PairData，claim 与 doc 节点跨图互相对齐。
+
+        同时计算宏观/微观注入所需的中间量并暂存到实例变量：
+          - self._delta_h_g : Δh_G = g1 - g2  [B, gmn_dim]  供通路一（宏观）使用
+          - self._graph_kv  : 节点嵌入矩阵     [B, N_max, llm_dim]  供通路二（微观）使用
 
         返回:
             padded      : [B, N_max, llm_dim]  供 Cross-Attention 注入
@@ -315,11 +375,17 @@ class LLMGraphModel(nn.Module):
         # graph_global [B, gmn_dim], batch_c, batch_d
         node_c, node_d, graph_global, batch_c, batch_d = self.gmn(pair)
 
-        # 合并节点 → Projector → LLM 维度
+        # ---- 通路一（宏观）：Δh_G = h_claim - h_doc ----
+        # 对各自节点做全局平均池化，得到图级向量 g1/g2
+        batch_size = len(data['id'])
+        g1 = global_mean_pool(node_c, batch_c)  # [B, gmn_dim]
+        g2 = global_mean_pool(node_d, batch_d)  # [B, gmn_dim]
+        self._delta_h_g = g1 - g2               # [B, gmn_dim]
+
+        # ---- 通路二（微观）：节点嵌入矩阵（投影到 LLM 隐空间）----
         node_all  = self.projector(torch.cat([node_c, node_d], dim=0))  # [N_c+N_d, llm_dim]
         batch_all = torch.cat([batch_c, batch_d], dim=0)
 
-        batch_size = len(data['id'])
         per_sample = []
         for i in range(batch_size):
             nodes_i = node_all[batch_all == i]
@@ -331,7 +397,7 @@ class LLMGraphModel(nn.Module):
         for i, s in enumerate(per_sample):
             padded[i, :s.size(0)] = s
 
-        return padded, graph_global  # [B,N_max,llm_dim], [B,gmn_dim]
+        return padded, graph_global  # [B, N_max, llm_dim], [B, gmn_dim]
 
     # -----------------------------------------------------------------------
     # 辅助：Qwen chat template
@@ -433,7 +499,9 @@ class LLMGraphModel(nn.Module):
                 return_dict=True,
             )
 
-        self._graph_kv = None  # 清理
+        # 清理暂存的图特征（避免显存泄漏）
+        self._graph_kv  = None
+        self._delta_h_g = None
 
         # 6. 辅助分类 loss（GMN graph_global → 直接预测 label）
         lm_loss  = outputs.loss
@@ -482,7 +550,9 @@ class LLMGraphModel(nn.Module):
                 pad_token_id=self.tokenizer.pad_token_id,
             )
 
-        self._graph_kv = None
+        # 清理暂存的图特征
+        self._graph_kv  = None
+        self._delta_h_g = None
 
         # 只截取新生成的 token
         new_ids = output_ids[:, enc.input_ids.shape[1]:]

@@ -115,13 +115,21 @@ def compute_metrics(preds: list, labels: list) -> dict:
 
 
 def load_checkpoint(model: LLMGraphModel, ckpt_path: str):
-    """加载 GNN / Projector / Cross-Attn 权重，以及 LoRA adapter（如有）。"""
+    """加载 GNN / Projector / 宏观通路 / Cross-Attn 权重，以及 LoRA adapter（如有）。"""
     ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
     model.gmn.load_state_dict(ckpt['gmn'])
     model.projector.load_state_dict(ckpt['projector'])
     model.cross_attn_layer.load_state_dict(ckpt['cross_attn'])
     if 'gmn_cls_head' in ckpt:
         model.gmn_cls_head.load_state_dict(ckpt['gmn_cls_head'])
+    # 宏观通路组件（向后兼容旧版检查点）
+    if 'W_graph' in ckpt:
+        model.W_graph.load_state_dict(ckpt['W_graph'])
+    if 'gamma' in ckpt:
+        model.gamma.data.copy_(ckpt['gamma'])
+    if 'macro_proj' in ckpt:
+        model.macro_proj.load_state_dict(ckpt['macro_proj'])
+
     epoch = ckpt.get('epoch', '?')
     bacc  = ckpt.get('val_bacc', '?')
     print(f"[Ckpt] 加载检查点 (Epoch={epoch}, val_BAcc={bacc})")
