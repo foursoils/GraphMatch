@@ -24,6 +24,7 @@ import yaml
 import pandas as pd
 from tqdm import tqdm
 from torch.utils.data import DataLoader
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 
 _PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _PROJ_ROOT)
@@ -88,30 +89,7 @@ def parse_binary_pred(text: str) -> int:
     return -1
 
 
-def compute_metrics(preds: list, labels: list) -> dict:
-    """计算 BAcc / Accuracy / F1 / Precision / Recall。"""
-    tp = fp = tn = fn = 0
-    for p, l in zip(preds, labels):
-        if p == 1 and l == 1:   tp += 1
-        elif p == 1 and l == 0: fp += 1
-        elif p == 0 and l == 0: tn += 1
-        else:                   fn += 1
-
-    total    = tp + fp + tn + fn
-    acc      = (tp + tn) / total if total > 0 else 0.0
-    prec     = tp / (tp + fp)   if (tp + fp) > 0 else 0.0
-    recall   = tp / (tp + fn)   if (tp + fn) > 0 else 0.0
-    spec     = tn / (tn + fp)   if (tn + fp) > 0 else 0.0
-    f1       = 2 * prec * recall / (prec + recall) if (prec + recall) > 0 else 0.0
-    bacc     = (recall + spec) / 2
-
-    return {
-        'BAcc': round(bacc * 100, 2),
-        'Acc':  round(acc  * 100, 2),
-        'F1':   round(f1   * 100, 2),
-        'P':    round(prec * 100, 2),
-        'R':    round(recall * 100, 2),
-    }
+# compute_metrics has been removed, using sklearn.metrics instead.
 
 
 def load_checkpoint(model: LLMGraphModel, ckpt_path: str):
@@ -122,6 +100,10 @@ def load_checkpoint(model: LLMGraphModel, ckpt_path: str):
     model.cross_attn_layer.load_state_dict(ckpt['cross_attn'])
     if 'gmn_cls_head' in ckpt:
         model.gmn_cls_head.load_state_dict(ckpt['gmn_cls_head'])
+    if 'graph_to_head' in ckpt:
+        model.graph_to_head.load_state_dict(ckpt['graph_to_head'])
+    if 'gammas' in ckpt:
+        model.gammas.data.copy_(ckpt['gammas'])
     epoch = ckpt.get('epoch', '?')
     bacc  = ckpt.get('val_bacc', '?')
     print(f"[Ckpt] 加载检查点 (Epoch={epoch}, val_BAcc={bacc})")
@@ -172,37 +154,47 @@ def evaluate_dataset(
         collate_fn=llm_graph_collate_fn,
     )
 
-    records = []
     all_preds, all_labels = [], []
 
     model.eval()
     for batch in tqdm(loader, desc=f"  推理", leave=False):
         result = model.inference(batch)
-        for sid, pred_text, label in zip(result['id'], result['pred'], result['label']):
+        for pred_text, label in zip(result['pred'], result['label']):
             p = parse_binary_pred(pred_text)
             all_preds.append(p)
             all_labels.append(int(label))
-            records.append({
-                'id':         sid,
-                'pred_label': p,
-                'pred_text':  pred_text,
-                'label':      int(label),
-            })
 
-    # 过滤解析失败样本后计算指标
-    valid_p = [p for p in all_preds if p != -1]
-    valid_l = [l for p, l in zip(all_preds, all_labels) if p != -1]
-    parse_rate = len(valid_p) / max(len(all_preds), 1)
-    metrics = compute_metrics(valid_p, valid_l) if valid_p else {}
-    metrics['parse_rate'] = round(parse_rate * 100, 2)
-    metrics['n_samples']  = len(all_preds)
+    # 写出预测结果到 our_results 文件夹中，保留原有字段并添加 pred_label
+    underlying_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
+    out_df = underlying_ds.df.copy()
+    if test_limit > 0:
+        out_df = out_df.iloc[:min(test_limit, len(out_df))].copy()
+        
+    out_df['pred_label'] = all_preds
 
-    # 保存结果
-    out_df = pd.DataFrame(records)
+    # 只保留 id, claim, doc, label 和 pred_label
+    cols_to_keep = ['id', 'claim', 'doc', 'label', 'pred_label']
+    cols_to_keep = [col for col in cols_to_keep if col in out_df.columns]
+    out_df = out_df[cols_to_keep]
+
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     out_df.to_parquet(output_path, index=False)
 
-    return metrics
+    # 过滤解析失败样本后计算指标供日志打印
+    valid_p = [p for p in all_preds if p != -1]
+    valid_l = [l for p, l in zip(all_preds, all_labels) if p != -1]
+    
+    acc = accuracy_score(valid_l, valid_p) if valid_p else 0.0
+    bacc = balanced_accuracy_score(valid_l, valid_p) if valid_p else 0.0
+    f1 = f1_score(valid_l, valid_p, average='binary', zero_division=0) if valid_p else 0.0
+    
+    return {
+        'Acc': acc,
+        'BAcc': bacc,
+        'F1': f1,
+        'n_samples': len(all_preds),
+        'valid_samples': len(valid_p),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +257,9 @@ def main():
             print(f"  [Skip] 文件不存在: {parquet_path}")
             continue
 
-        output_path = os.path.join(data_root, ds_name, 'ablation_results', out_fname)
+        output_path = os.path.join(data_root, ds_name, 'our_results', out_fname)
+        print(f"  输入路径: {parquet_path}")
+        print(f"  输出路径: {output_path}")
 
         metrics = evaluate_dataset(
             model=model,
@@ -276,32 +270,12 @@ def main():
             output_path=output_path,
             test_limit=test_limit,
         )
-        all_results[ds_name] = metrics
 
-        print(f"  BAcc={metrics.get('BAcc','?')}  Acc={metrics.get('Acc','?')}  "
-              f"F1={metrics.get('F1','?')}  parse={metrics.get('parse_rate','?')}%  "
-              f"n={metrics.get('n_samples','?')}")
-        print(f"  结果已保存: {output_path}")
+        print(f"  [Done] 处理完成。样本数: {metrics['n_samples']} | "
+              f"Acc: {metrics['Acc']:.4f} | BAcc: {metrics['BAcc']:.4f} | F1: {metrics['F1']:.4f}")
+        print(f"  结果已写出: {output_path}")
 
-    # ---- 汇总 ----
-    print(f"\n{'='*50}")
-    print("全部评估结果汇总：")
-    print(f"{'数据集':<20} {'BAcc':>7} {'Acc':>7} {'F1':>7} {'parse%':>8}")
-    print('-' * 50)
-    baccs = []
-    for ds_name, m in all_results.items():
-        bacc = m.get('BAcc', 0)
-        baccs.append(bacc)
-        print(f"{ds_name:<20} {bacc:>7.2f} {m.get('Acc',0):>7.2f} "
-              f"{m.get('F1',0):>7.2f} {m.get('parse_rate',0):>8.2f}")
-    if baccs:
-        print(f"\n平均 BAcc (across {len(baccs)} datasets): {sum(baccs)/len(baccs):.2f}")
-
-    # 保存汇总 JSON
-    summary_path = os.path.join(output_dir, 'eval_summary.json')
-    with open(summary_path, 'w') as f:
-        json.dump(all_results, f, indent=2, ensure_ascii=False)
-    print(f"\n汇总已保存: {summary_path}")
+    print("\n[All Done] 所有数据集批量推理完毕。")
 
 
 if __name__ == '__main__':

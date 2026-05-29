@@ -364,6 +364,8 @@ def train():
                     'projector':    unwrapped_model.projector.state_dict(),
                     'cross_attn':   unwrapped_model.cross_attn_layer.state_dict(),
                     'gmn_cls_head': unwrapped_model.gmn_cls_head.state_dict(),
+                    'graph_to_head': unwrapped_model.graph_to_head.state_dict(),
+                    'gammas':       unwrapped_model.gammas.data,
                 }
                 # LoRA adapter 单独保存
                 try:

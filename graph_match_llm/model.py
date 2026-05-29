@@ -34,6 +34,7 @@ import contextlib
 import torch
 import torch.nn as nn
 from torch_geometric.utils import scatter
+from torch_geometric.nn import global_mean_pool
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 try:
@@ -79,7 +80,7 @@ class GraphCrossAttnLayer(nn.Module):
     Query  = 文本隐状态 h  [B, L, D_llm]
     Key/V  = 图节点嵌入   [B, N_graph, D_llm]（已由 Projector 投影）
 
-    输出 = LayerNorm(h + cross_attn(h, graph_nodes))
+    输出 = LayerNorm(h + tanh(alpha) * cross_attn(h, graph_nodes))
     """
 
     def __init__(self, llm_dim: int, num_heads: int, dropout: float = 0.1):
@@ -92,6 +93,8 @@ class GraphCrossAttnLayer(nn.Module):
         )
         self.norm    = nn.LayerNorm(llm_dim)
         self.dropout = nn.Dropout(dropout)
+        # Learnable gating parameter initialized to 0
+        self.alpha_micro = nn.Parameter(torch.zeros(1))
 
     def forward(
         self,
@@ -105,7 +108,7 @@ class GraphCrossAttnLayer(nn.Module):
             value=graph_embeds,
             key_padding_mask=key_padding_mask,
         )
-        return self.norm(hidden_states + self.dropout(attn_out))
+        return self.norm(hidden_states + torch.tanh(self.alpha_micro) * self.dropout(attn_out))
 
 
 # ---------------------------------------------------------------------------
@@ -172,8 +175,18 @@ class LLMGraphModel(nn.Module):
             device_map=device_map,
         )
 
+        # LLM hidden size & layers/heads info
+        base_cfg   = getattr(llm, 'config', None) or getattr(llm.base_model, 'config', None)
+        text_cfg   = getattr(base_cfg, 'text_config', base_cfg)
+        llm_dim    = text_cfg.hidden_size
+        self.llm_dim = llm_dim
+        self.num_heads = text_cfg.num_attention_heads
+        num_layers = getattr(text_cfg, 'num_hidden_layers', 32)
+        self.num_layers = num_layers
+
         # ---- LoRA ----
         if _PEFT_AVAILABLE:
+            layers_to_transform = list(range(self.inject_layer, num_layers))
             lora_config = LoraConfig(
                 task_type=TaskType.CAUSAL_LM,
                 r=lora_cfg.get('r', 16),
@@ -181,21 +194,16 @@ class LLMGraphModel(nn.Module):
                 lora_dropout=lora_cfg.get('lora_dropout', 0.05),
                 target_modules=lora_cfg.get('target_modules', ['q_proj', 'k_proj', 'v_proj', 'o_proj']),
                 bias="none",
+                layers_to_transform=layers_to_transform,
             )
             llm = get_peft_model(llm, lora_config)
-            print("[Init] LoRA 已应用。")
+            print(f"[Init] LoRA 已应用 (仅作用于 Layer {self.inject_layer} 至 {num_layers-1})。")
             llm.print_trainable_parameters()
         else:
             # 没有 peft 时全量微调（仅调试用）
             print("[Init] 无 LoRA，LLM 全量可训练（仅调试）。")
 
         self.llm = llm
-
-        # LLM hidden size（从 config 读）
-        base_cfg   = getattr(llm, 'config', None) or getattr(llm.base_model, 'config', None)
-        text_cfg   = getattr(base_cfg, 'text_config', base_cfg)
-        llm_dim    = text_cfg.hidden_size
-        self.llm_dim = llm_dim
 
         # 记录主设备
         if _dev.type == 'cuda':
@@ -230,6 +238,12 @@ class LLMGraphModel(nn.Module):
             num_heads=self.cross_attn_heads,
             dropout=0.1,
         ).to(_dev)
+
+        # ---- 宏观自注意力偏置注入 ----
+        self.current_b_graph = None
+        self.graph_to_head = nn.Linear(gmn_dim, self.num_heads, bias=False).to(_dev)
+        self.gammas = nn.Parameter(torch.zeros(self.num_layers)).to(_dev)
+        self._register_attention_bias_hooks()
 
         # ---- 注册 forward hook 到指定层 ----
         self._graph_kv: torch.Tensor = None   # 暂存图节点嵌入（hook 内访问）
@@ -295,6 +309,69 @@ class LLMGraphModel(nn.Module):
         self._hook_handle = layers[k].register_forward_hook(_hook)
         print(f"[Init] Cross-Attention hook 已注册到 Layer {k}。")
 
+    def _register_attention_bias_hooks(self):
+        """对 inject_layer 及之后的 self_attn 模块注册 attention bias patch。"""
+        layers = self._get_transformer_layers()
+        for idx in range(self.inject_layer, self.num_layers):
+            layer = layers[idx]
+            if hasattr(layer, 'self_attn'):
+                self_attn_module = layer.self_attn
+                self._patch_attention_forward(self_attn_module, idx)
+        print(f"[Init] Attention Bias 注入已注册到 Layer {self.inject_layer} 至 {self.num_layers - 1}。")
+
+    def _patch_attention_forward(self, self_attn_module, layer_idx):
+        original_forward = self_attn_module.forward
+        model_ref = self
+
+        def new_forward(
+            self,  # refers to self_attn_module
+            hidden_states,
+            position_embeddings = None,
+            attention_mask = None,
+            past_key_values = None,
+            **kwargs
+        ):
+            if model_ref.current_b_graph is not None:
+                B, L, _ = hidden_states.shape
+                if attention_mask is not None:
+                    S = attention_mask.shape[-1]
+                elif past_key_values is not None:
+                    if hasattr(past_key_values, "get_seq_len"):
+                        S = past_key_values.get_seq_len(layer_idx) + L
+                    else:
+                        try:
+                            S = past_key_values[layer_idx][0].shape[2] + L
+                        except Exception:
+                            S = L
+                else:
+                    S = L
+
+                gamma = model_ref.gammas[layer_idx]
+                b_bias = gamma * model_ref.current_b_graph.unsqueeze(-1).unsqueeze(-1)
+                b_bias = b_bias.to(device=hidden_states.device, dtype=hidden_states.dtype)
+
+                if attention_mask is not None:
+                    b_bias = b_bias.expand(B, model_ref.num_heads, L, S)
+                    attention_mask = (attention_mask + b_bias).contiguous()
+                else:
+                    if L > 1:
+                        causal = torch.full((L, S), fill_value=float("-inf"), device=hidden_states.device, dtype=hidden_states.dtype)
+                        causal = torch.triu(causal, diagonal=1)
+                        attention_mask = (causal.unsqueeze(0).unsqueeze(1) + b_bias).contiguous()
+                    else:
+                        attention_mask = b_bias.expand(B, model_ref.num_heads, L, S).contiguous()
+
+            return original_forward(
+                hidden_states=hidden_states,
+                position_embeddings=position_embeddings,
+                attention_mask=attention_mask,
+                past_key_values=past_key_values,
+                **kwargs
+            )
+
+        import types
+        self_attn_module.forward = types.MethodType(new_forward, self_attn_module)
+
     # -----------------------------------------------------------------------
     # 图编码
     # -----------------------------------------------------------------------
@@ -315,11 +392,19 @@ class LLMGraphModel(nn.Module):
         # graph_global [B, gmn_dim], batch_c, batch_d
         node_c, node_d, graph_global, batch_c, batch_d = self.gmn(pair)
 
+        batch_size = len(data['id'])
+        # 计算两图全局特征向量之差（Macro-Level 注入）
+        g_c = global_mean_pool(node_c, batch_c, size=batch_size)  # [B, gmn_dim]
+        g_d = global_mean_pool(node_d, batch_d, size=batch_size)  # [B, gmn_dim]
+        delta_h_g = g_c - g_d                                     # [B, gmn_dim]
+
+        # 投影并在 model 上暂存，供 self_attn.forward 访问
+        self.current_b_graph = self.graph_to_head(delta_h_g)       # [B, num_heads]
+
         # 合并节点 → Projector → LLM 维度
         node_all  = self.projector(torch.cat([node_c, node_d], dim=0))  # [N_c+N_d, llm_dim]
         batch_all = torch.cat([batch_c, batch_d], dim=0)
 
-        batch_size = len(data['id'])
         per_sample = []
         for i in range(batch_size):
             nodes_i = node_all[batch_all == i]
@@ -397,7 +482,7 @@ class LLMGraphModel(nn.Module):
             return_tensors='pt',
             padding=True,
             truncation=True,
-            max_length=self.max_txt_len + 512,  # instruction + CoT
+            max_length=self.max_txt_len + self.max_new_tokens,  # instruction + CoT
         ).to(_dev)
 
         enc_prompt = self.tokenizer(
@@ -434,6 +519,7 @@ class LLMGraphModel(nn.Module):
             )
 
         self._graph_kv = None  # 清理
+        self.current_b_graph = None  # 清理
 
         # 6. 辅助分类 loss（GMN graph_global → 直接预测 label）
         lm_loss  = outputs.loss
@@ -483,6 +569,7 @@ class LLMGraphModel(nn.Module):
             )
 
         self._graph_kv = None
+        self.current_b_graph = None
 
         # 只截取新生成的 token
         new_ids = output_ids[:, enc.input_ids.shape[1]:]

@@ -1,18 +1,18 @@
 llm_graph:
 
   data:
-    # 训练集：带 CoT 字段的 parquet（由教师模型生成）
-    train_cot_file:  "../data/minicheck/data_with_cot/gemma4_31b_tk.parquet"
+    # 训练集：带 CoT 字段 of parquet（由教师模型生成）
+    train_cot_file: "../data/minicheck/data_with_cot/gemma4_31b_tk.parquet"
     # 训练集预计算 Embedding（显式指定，ID 与 train_cot_file 一一对应）
     train_embed_file: "../data/embeddings/Qwen3-Embedding-0.6B/minicheck/gemma_26b_tk/train.pt"
-    # 验证集：带图字段的 parquet（不需要 CoT，用来算 BAcc）
-    val_file:        "../data/minicheck/data_with_graph/gemma_26b_tk/val.parquet"
+    # 验证集：带图字段 of parquet（不需要 CoT，用来算 BAcc）
+    val_file: "../data/minicheck/data_with_graph/gemma_26b_tk/val.parquet"
     # 验证集预计算 Embedding
-    val_embed_file:  "../data/embeddings/Qwen3-Embedding-0.6B/minicheck/gemma_26b_tk/val.pt"
+    val_embed_file: "../data/embeddings/Qwen3-Embedding-0.6B/minicheck/gemma_26b_tk/val.pt"
     # 推理评估的数据根目录
-    data_root:       "../data"
+    data_root: "../data"
     # 推理结果输出文件名
-    output_filename: "qwen3.5_4b_llm_graph.parquet"
+    output_filename: "qwen3.5_2b.parquet"
     # 需要推理的数据集
     datasets:
       - AggreFact-CNN
@@ -26,59 +26,62 @@ llm_graph:
 
   model:
     # 学生 LLM 路径
-    llm_model_path:    "../models/llms/Qwen3.5-4B"
+    llm_model_path: "../models/llms/Qwen3.5-2B"
     # 节点/边 Embedding 模型
-    embed_model_path:  "../models/embeddings/Qwen3-Embedding-0.6B"
+    embed_model_path: "../models/embeddings/Qwen3-Embedding-0.6B"
     # 图信息注入到 LLM 的第 k 层（full_attention 层：4,8,12,16,20,24,28,32；选中间层）
-    inject_layer:      16
+    inject_layer: 16
     # Cross-Attention 头数
-    cross_attn_heads:  8
+    cross_attn_heads: 8
     # 文本最大 token 数（instruction 部分）
-    max_txt_len:       1024
+    max_txt_len: 30720
     # 推理时最大生成 token 数（仅 Yes/No 时=5，生成 CoT 时=512）
-    max_new_tokens:    512
+    max_new_tokens: 10240
 
   gmn:
     # GMN（Graph Matching Network）：claim 图和 doc 图跨图互相感知对齐
-    in_dim:      1024    # Qwen3-Embedding-0.6B 的输出维度（节点/边 embedding 维度）
-    hidden_dim:  1024     # GMN 内部隐层维度（与 nli_graph 保持一致）
-    num_layers:  3       # GMNPropLayer 传播层数
-    dropout:     0.3
+    in_dim: 1024 # Qwen3-Embedding-0.6B 的输出维度（节点/边 embedding 维度）
+    hidden_dim: 1024 # GMN 内部隐层维度（与 nli_graph 保持一致）
+    num_layers: 3 # GMNPropLayer 传播层数
+    dropout: 0.3
 
   lora:
-    r:            16
-    lora_alpha:   32
+    r: 16
+    lora_alpha: 32
     lora_dropout: 0.05
-    # 注入 LoRA 的目标模块（Qwen3.5 的注意力投影层）
+    # 注入 LoRA 的目标模块（包含自注意力投影与 FFN 全连接，以适配 train.md 方案）
     target_modules:
       - "q_proj"
       - "k_proj"
       - "v_proj"
       - "o_proj"
+      - "gate_proj"
+      - "up_proj"
+      - "down_proj"
 
   training:
-    # GPU：2× L40S 46GB；须用英文逗号。双卡请用 accelerate launch（见 README/下方注释）
-    gpu_ids:          "0,1"
+    # GPU：单卡请设为 "0"
+    gpu_ids: "0"
     # 混合精度，可选 "bf16", "fp16", "no"
-    mixed_precision:  "bf16"
-    seed:             42
-    num_epochs:       10
-    batch_size:       1       # 每卡 batch；双卡时显存仍紧，暂保持 1
-    eval_batch_size:  8       # 验证分片到两卡，原 4→8
-    grad_accum_steps: 8       # 双卡：1×2×8=16 等效 batch（与单卡 1×16 一致）
-    num_workers:      8       # DataLoader 并行，约每卡 4 worker
+    mixed_precision: "bf16"
+    seed: 42
+    num_epochs: 10
+    batch_size: 1 # 每卡 batch；双卡时显存仍紧，暂保持 1
+    eval_batch_size: 4 # 单卡评估，降低以保显存安全，原 8->4
+    grad_accum_steps: 16 # 单卡：1×1×16=16 等效 batch（与原双卡 1×2×8=16 一致）
+    num_workers: 8 # DataLoader 并行，约每卡 4 worker
     # 双学习率：LoRA + Cross-Attn/GNN 分开
-    lora_lr:          2.0e-4
-    graph_lr:         5.0e-5  # GMN + Projector + Cross-Attn 模块
-    aux_lambda:       0.3     # 辅助分类 loss 权重（GMN 分类头，给 GMN 强梯度信号）
-    weight_decay:     0.05
-    warmup_ratio:     0.1
-    patience:         3       # Early Stopping
-    output_dir:       "../models/llm_graph"
+    lora_lr: 2.0e-4
+    graph_lr: 5.0e-5 # GMN + Projector + Cross-Attn 模块
+    aux_lambda: 0.3 # 辅助分类 loss 权重（GMN 分类头，给 GMN 强梯度信号）
+    weight_decay: 0.05
+    warmup_ratio: 0.1
+    patience: 3 # Early Stopping
+    output_dir: "../models/llm_graph"
     # 训练时生成目标：cot_and_answer（CoT + Yes/No） 或 answer_only（仅 Yes/No）
-    train_target:     "cot_and_answer"
+    train_target: "cot_and_answer"
 
   infer:
-    batch_size:     8       # 双卡推理可加大（evaluate 单进程时按显存酌情调）
-    num_workers:    8
-    test_limit:     0         # 0=全量，>0=调试截断
+    batch_size: 4 # 单卡推理，降低以保显存安全，原 8->4
+    num_workers: 8
+    test_limit: 0 # 0=全量，>0=调试截断
