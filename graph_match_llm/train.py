@@ -252,6 +252,17 @@ def train():
         embed_cache_path=val_embed_file,
     )
 
+    if train_cfg.get('val_sample', False):
+        val_sample_size = train_cfg.get('val_sample_size', 300)
+        total_val = len(val_ds)
+        if val_sample_size < total_val:
+            import numpy as np
+            rng = np.random.default_rng(42)
+            indices = rng.choice(total_val, size=val_sample_size, replace=False).tolist()
+            from torch.utils.data import Subset
+            val_ds = Subset(val_ds, indices)
+            accelerator.print(f"[Dataset] 启用验证集采样评估，样本数: {val_sample_size}/{total_val}")
+
     train_loader = DataLoader(
         train_ds,
         batch_size=train_cfg.get('batch_size', 1),
@@ -388,8 +399,9 @@ def train():
                     'projector':    unwrapped_model.projector.state_dict(),
                     'cross_attn':   unwrapped_model.cross_attn_layer.state_dict(),
                     'gmn_cls_head': unwrapped_model.gmn_cls_head.state_dict(),
-                    'graph_to_head': unwrapped_model.graph_to_head.state_dict(),
-                    'gammas':       unwrapped_model.gammas.data,
+                    'graph_global_proj': unwrapped_model.graph_global_proj.state_dict(),
+                    'graph_global_norm': unwrapped_model.graph_global_norm.state_dict(),
+                    'alpha_macro':       unwrapped_model.alpha_macro.data,
                 }
                 # LoRA adapter 单独保存
                 try:

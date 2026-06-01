@@ -12,7 +12,7 @@ llm_graph:
     # 推理评估的数据根目录
     data_root: "../data"
     # 推理结果输出文件名
-    output_filename: "qwen3.5_2b.parquet"
+    output_filename: "qwen3.5_0.8b.parquet"
     # 需要推理的数据集
     datasets:
       - AggreFact-CNN
@@ -26,17 +26,17 @@ llm_graph:
 
   model:
     # 学生 LLM 路径
-    llm_model_path: "../models/llms/Qwen3.5-2B"
+    llm_model_path: "../models/llms/Qwen3.5-0.8B"
     # 节点/边 Embedding 模型
     embed_model_path: "../models/embeddings/Qwen3-Embedding-0.6B"
-    # 图信息注入到 LLM 的第 k 层（full_attention 层：4,8,12,16,20,24,28,32；选中间层）
-    inject_layer: 16
+    # 图信息注入到 LLM 的第 k 层（Qwen3.5-0.8B 的 full_attention 中间层为 11）
+    inject_layer: 11
     # Cross-Attention 头数
     cross_attn_heads: 8
     # 文本最大 token 数（instruction 部分）
-    max_txt_len: 30720
+    max_txt_len: 12288
     # 推理时最大生成 token 数（仅 Yes/No 时=5，生成 CoT 时=512）
-    max_new_tokens: 10240
+    max_new_tokens: 8192
 
   gmn:
     # GMN（Graph Matching Network）：claim 图和 doc 图跨图互相感知对齐
@@ -61,15 +61,15 @@ llm_graph:
 
   training:
     # GPU：单卡请设为 "0"，双卡请设为 "0,1"
-    gpu_ids: "0,1"
+    gpu_ids: "0"
     # 混合精度，可选 "bf16", "fp16", "no"
     mixed_precision: "bf16"
     seed: 42
     num_epochs: 10
-    batch_size: 1 # 每卡 batch；双卡时显存仍紧，暂保持 1
+    batch_size: 1 # 每卡 batch
     eval_batch_size: 4 # 每卡评估，降低以保显存安全，原 8->4
-    grad_accum_steps: 8 # 双卡：1×2×8=16 等效 batch（与原单卡 1×1×16=16 一致）
-    num_workers: 8 # DataLoader 并行，约每卡 4 worker
+    grad_accum_steps: 16 # 单卡：1×1×16=16 等效 batch
+    num_workers: 4 # DataLoader 并行，约单卡 4 worker
     # 双学习率：LoRA + Cross-Attn/GNN 分开
     lora_lr: 2.0e-4
     graph_lr: 5.0e-5 # GMN + Projector + Cross-Attn 模块
@@ -78,6 +78,9 @@ llm_graph:
     warmup_ratio: 0.1
     patience: 3 # Early Stopping
     output_dir: "../models/llm_graph"
+    # 验证集评估采样开关及样本量（训练时提速）
+    val_sample: true
+    val_sample_size: 300
     # 训练时生成目标：cot_and_answer（CoT + Yes/No） 或 answer_only（仅 Yes/No）
     train_target: "cot_and_answer"
 

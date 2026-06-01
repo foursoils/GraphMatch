@@ -100,10 +100,12 @@ def load_checkpoint(model: LLMGraphModel, ckpt_path: str):
     model.cross_attn_layer.load_state_dict(ckpt['cross_attn'])
     if 'gmn_cls_head' in ckpt:
         model.gmn_cls_head.load_state_dict(ckpt['gmn_cls_head'])
-    if 'graph_to_head' in ckpt:
-        model.graph_to_head.load_state_dict(ckpt['graph_to_head'])
-    if 'gammas' in ckpt:
-        model.gammas.data.copy_(ckpt['gammas'])
+    if 'graph_global_proj' in ckpt:
+        model.graph_global_proj.load_state_dict(ckpt['graph_global_proj'])
+    if 'graph_global_norm' in ckpt:
+        model.graph_global_norm.load_state_dict(ckpt['graph_global_norm'])
+    if 'alpha_macro' in ckpt:
+        model.alpha_macro.data.copy_(ckpt['alpha_macro'])
     epoch = ckpt.get('epoch', '?')
     bacc  = ckpt.get('val_bacc', '?')
     print(f"[Ckpt] 加载检查点 (Epoch={epoch}, val_BAcc={bacc})")
