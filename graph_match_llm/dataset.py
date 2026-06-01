@@ -151,6 +151,7 @@ class LLMGraphDataset(Dataset):
         instruction = self._build_instruction(doc, claim)
 
         item = {
+            'index':       idx,
             'id':          sample_id,
             'instruction': instruction,
             'label':       label,
@@ -193,4 +194,6 @@ def llm_graph_collate_fn(batch):
     }
     if 'target' in batch[0]:
         out['target'] = [x['target'] for x in batch]
+    if 'index' in batch[0]:
+        out['index'] = [x['index'] for x in batch]
     return out

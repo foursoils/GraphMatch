@@ -167,7 +167,8 @@ def train():
 
     # 学习率：Linear Warmup → Cosine Decay（到末尾自然降到 ~0，掐死后期过拟合空间）
     num_epochs    = config['training']['num_epochs']
-    steps_per_ep  = len(train_loader)
+    accum_steps   = config['training'].get('accum_steps', 1)
+    steps_per_ep  = (len(train_loader) + accum_steps - 1) // accum_steps
     total_steps   = num_epochs * steps_per_ep
     warmup_steps  = int(total_steps * config['training'].get('warmup_ratio', 0.1))
     scheduler = get_cosine_schedule_with_warmup(
@@ -175,7 +176,7 @@ def train():
         num_warmup_steps   = warmup_steps,
         num_training_steps = total_steps,
     )
-    print(f"  调度器: warmup={warmup_steps} steps / total={total_steps} steps (cosine decay)")
+    print(f"  调度器: accum_steps={accum_steps} | warmup={warmup_steps} steps / total={total_steps} steps (cosine decay)")
 
     # 混合精度
     use_amp = (device.type == 'cuda')
@@ -211,12 +212,12 @@ def train():
     print(f"\n[5/5] 开始训练（共 {num_epochs} epoch，早停耐心={patience}）\n")
     for epoch in range(1, num_epochs + 1):
         model.train()
+        optimizer.zero_grad()
         total_loss, all_preds, all_labels = 0.0, [], []
 
         pbar = tqdm(train_loader, desc=f"Epoch {epoch:02d}/{num_epochs}", unit="batch")
-        for batch in pbar:
+        for batch_idx, batch in enumerate(pbar):
             batch = batch.to(device)
-            optimizer.zero_grad()
 
             input_ids      = batch.input_ids
             attention_mask = batch.attention_mask
@@ -226,21 +227,26 @@ def train():
             with autocast('cuda', enabled=use_amp):
                 logits = model(input_ids, attention_mask, token_type_ids, batch)
                 labels_nli = 1 - labels   # dataset label 翻转为 NLI class index
-                loss   = criterion(logits, labels_nli)
+                raw_loss = criterion(logits, labels_nli)
+                loss   = raw_loss / accum_steps
+            
             scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            scaler.step(optimizer)
-            scaler.update()
-            scheduler.step()   # cosine 调度按 step 推进
 
-            total_loss += loss.item() * labels.size(0)
+            if (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == len(train_loader):
+                scaler.unscale_(optimizer)
+                nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+                scheduler.step()   # cosine 调度按 step 推进
+
+            total_loss += raw_loss.item() * labels.size(0)
             preds = (logits[:, 0] > logits[:, 1]).long().detach().cpu().numpy()
             all_preds.extend(preds.tolist())
             all_labels.extend(labels.cpu().numpy().tolist())
             running_acc = accuracy_score(all_labels, all_preds)
             pbar.set_postfix({
-                'loss': f'{loss.item():.4f}',
+                'loss': f'{raw_loss.item():.4f}',
                 'acc':  f'{running_acc:.4f}',
             })
 

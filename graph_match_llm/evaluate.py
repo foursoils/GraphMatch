@@ -108,7 +108,10 @@ def load_checkpoint(model: LLMGraphModel, ckpt_path: str):
         model.alpha_macro.data.copy_(ckpt['alpha_macro'])
     epoch = ckpt.get('epoch', '?')
     bacc  = ckpt.get('val_bacc', '?')
-    print(f"[Ckpt] 加载检查点 (Epoch={epoch}, val_BAcc={bacc})")
+    
+    is_main = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
+    if is_main:
+        print(f"[Ckpt] 加载检查点 (Epoch={epoch}, val_BAcc={bacc})")
 
     # 尝试加载 LoRA adapter
     lora_dir = os.path.join(os.path.dirname(ckpt_path), 'lora_adapter')
@@ -116,9 +119,11 @@ def load_checkpoint(model: LLMGraphModel, ckpt_path: str):
         try:
             from peft import PeftModel
             model.llm = PeftModel.from_pretrained(model.llm, lora_dir)
-            print(f"[Ckpt] LoRA adapter 已加载: {lora_dir}")
+            if is_main:
+                print(f"[Ckpt] LoRA adapter 已加载: {lora_dir}")
         except Exception as e:
-            print(f"[Warn] LoRA adapter 加载失败: {e}")
+            if is_main:
+                print(f"[Warn] LoRA adapter 加载失败: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +138,7 @@ def evaluate_dataset(
     model_cfg:    dict,
     infer_cfg:    dict,
     output_path:  str,
+    accelerator,
     test_limit:   int = 0,
 ) -> dict:
     ds = LLMGraphDataset(
@@ -141,7 +147,7 @@ def evaluate_dataset(
         tokenizer=model.tokenizer,
         max_txt_len=model_cfg.get('max_txt_len', 1024),
         is_train=False,
-        device=f"cuda:{model.device_id}",
+        device=str(accelerator.device),
     )
 
     if test_limit > 0:
@@ -156,47 +162,86 @@ def evaluate_dataset(
         collate_fn=llm_graph_collate_fn,
     )
 
-    all_preds, all_labels = [], []
+    # Wrap model and loader
+    model, loader = accelerator.prepare(model, loader)
+
+    all_indices, all_preds, all_labels = [], [], []
 
     model.eval()
-    for batch in tqdm(loader, desc=f"  推理", leave=False):
-        result = model.inference(batch)
-        for pred_text, label in zip(result['pred'], result['label']):
-            p = parse_binary_pred(pred_text)
-            all_preds.append(p)
-            all_labels.append(int(label))
-
-    # 写出预测结果到 our_results 文件夹中，保留原有字段并添加 pred_label
-    underlying_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
-    out_df = underlying_ds.df.copy()
-    if test_limit > 0:
-        out_df = out_df.iloc[:min(test_limit, len(out_df))].copy()
+    for batch in tqdm(loader, desc=f"  推理", leave=False, disable=not accelerator.is_main_process):
+        unwrapped_model = accelerator.unwrap_model(model)
+        result = unwrapped_model.inference(batch)
         
-    out_df['pred_label'] = all_preds
+        pred_ids = [parse_binary_pred(p) for p in result['pred']]
+        labels = [int(l) for l in result['label']]
+        indices = [int(idx) for idx in batch['index']]
+        
+        device = accelerator.device
+        pred_tensor = torch.tensor(pred_ids, dtype=torch.long, device=device)
+        label_tensor = torch.tensor(labels, dtype=torch.long, device=device)
+        idx_tensor = torch.tensor(indices, dtype=torch.long, device=device)
+        
+        # Gather outputs across all cards
+        gathered_preds = accelerator.gather_for_metrics(pred_tensor)
+        gathered_labels = accelerator.gather_for_metrics(label_tensor)
+        gathered_indices = accelerator.gather_for_metrics(idx_tensor)
+        
+        all_preds.extend(gathered_preds.cpu().tolist())
+        all_labels.extend(gathered_labels.cpu().tolist())
+        all_indices.extend(gathered_indices.cpu().tolist())
 
-    # 只保留 id, claim, doc, label 和 pred_label
-    cols_to_keep = ['id', 'claim', 'doc', 'label', 'pred_label']
-    cols_to_keep = [col for col in cols_to_keep if col in out_df.columns]
-    out_df = out_df[cols_to_keep]
+    accelerator.wait_for_everyone()
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    out_df.to_parquet(output_path, index=False)
+    if accelerator.is_main_process:
+        # Reconstruct prediction array in original order, filtering duplicates from DDP padding
+        unique_results = {}
+        for idx, pred, label in zip(all_indices, all_preds, all_labels):
+            if idx not in unique_results:
+                unique_results[idx] = (pred, label)
 
-    # 过滤解析失败样本后计算指标供日志打印
-    valid_p = [p for p in all_preds if p != -1]
-    valid_l = [l for p, l in zip(all_preds, all_labels) if p != -1]
-    
-    acc = accuracy_score(valid_l, valid_p) if valid_p else 0.0
-    bacc = balanced_accuracy_score(valid_l, valid_p) if valid_p else 0.0
-    f1 = f1_score(valid_l, valid_p, average='binary', zero_division=0) if valid_p else 0.0
-    
-    return {
-        'Acc': acc,
-        'BAcc': bacc,
-        'F1': f1,
-        'n_samples': len(all_preds),
-        'valid_samples': len(valid_p),
-    }
+        underlying_ds = ds.dataset if isinstance(ds, torch.utils.data.Subset) else ds
+        out_df = underlying_ds.df.copy()
+        if test_limit > 0:
+            out_df = out_df.iloc[:min(test_limit, len(out_df))].copy()
+
+        reconstructed_preds = []
+        reconstructed_labels = []
+        for idx in range(len(out_df)):
+            if idx in unique_results:
+                pred, label = unique_results[idx]
+                reconstructed_preds.append(pred)
+                reconstructed_labels.append(label)
+            else:
+                reconstructed_preds.append(-1)
+                reconstructed_labels.append(-1)
+
+        out_df['pred_label'] = reconstructed_preds
+
+        # 只保留 id, claim, doc, label 和 pred_label
+        cols_to_keep = ['id', 'claim', 'doc', 'label', 'pred_label']
+        cols_to_keep = [col for col in cols_to_keep if col in out_df.columns]
+        out_df = out_df[cols_to_keep]
+
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        out_df.to_parquet(output_path, index=False)
+
+        # 过滤解析失败样本后计算指标供日志打印
+        valid_p = [p for p in reconstructed_preds if p != -1]
+        valid_l = [l for p, l in zip(reconstructed_preds, reconstructed_labels) if p != -1]
+        
+        acc = accuracy_score(valid_l, valid_p) if valid_p else 0.0
+        bacc = balanced_accuracy_score(valid_l, valid_p) if valid_p else 0.0
+        f1 = f1_score(valid_l, valid_p, average='binary', zero_division=0) if valid_p else 0.0
+        
+        return {
+            'Acc': acc,
+            'BAcc': bacc,
+            'F1': f1,
+            'n_samples': len(reconstructed_preds),
+            'valid_samples': len(valid_p),
+        }
+    else:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -224,13 +269,46 @@ def main():
     out_fname   = data_cfg.get('output_filename', 'llm_graph_pred.parquet')
     test_limit  = infer_cfg.get('test_limit', 0)
 
+    # ---- GPU 与环境变量配置 ----
+    gpu_ids = infer_cfg.get('gpu_ids', None)
+    if gpu_ids is not None and gpu_ids != "":
+        gpus = [x.strip() for x in str(gpu_ids).split(',') if x.strip()]
+        num_gpus = len(gpus)
+        if num_gpus > 1:
+            # 检查当前是否已经在分布式环境中运行（避免无限循环拉起）
+            is_distributed = any(k in os.environ for k in ["RANK", "LOCAL_RANK", "WORLD_SIZE"])
+            if not is_distributed:
+                print(f"\n[Self-Launcher] 检测到多卡配置 (gpu_ids: {gpu_ids})，正在自动通过 `accelerate launch` 启动多卡评估...")
+                os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_ids)
+                
+                import subprocess
+                cmd = [
+                    sys.executable,
+                    "-m",
+                    "accelerate.commands.launch",
+                    f"--num_processes={num_gpus}",
+                    sys.argv[0]
+                ] + sys.argv[1:]
+                
+                result = subprocess.run(cmd)
+                sys.exit(result.returncode)
+        
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_ids)
+
+    from accelerate import Accelerator
+    from accelerate.utils import DistributedDataParallelKwargs
+
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    accelerator = Accelerator(kwargs_handlers=[ddp_kwargs])
+
     ckpt_path = args.ckpt or os.path.join(output_dir, 'best_model.pt')
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"检查点不存在: {ckpt_path}")
 
     # ---- 初始化模型 ----
-    print("[Init] 初始化模型...")
-    model = LLMGraphModel(config)
+    if accelerator.is_main_process:
+        print("[Init] 初始化模型...")
+    model = LLMGraphModel(config, device=accelerator.device)
     load_checkpoint(model, ckpt_path)
     model.eval()
 
@@ -244,11 +322,10 @@ def main():
         'val_file', '../data/minicheck/data_with_graph/gemma_26b_tk/val.parquet'
     ))
 
-    all_results = {}
-
     for ds_name in datasets:
-        print(f"\n{'='*50}")
-        print(f"数据集: {ds_name}")
+        if accelerator.is_main_process:
+            print(f"\n{'='*50}")
+            print(f"数据集: {ds_name}")
 
         if ds_name == 'minicheck':
             parquet_path = minicheck_test
@@ -256,12 +333,14 @@ def main():
             parquet_path = os.path.join(data_root, ds_name, 'data_with_graph', 'gemma_26b_tk.parquet')
 
         if not os.path.exists(parquet_path):
-            print(f"  [Skip] 文件不存在: {parquet_path}")
+            if accelerator.is_main_process:
+                print(f"  [Skip] 文件不存在: {parquet_path}")
             continue
 
         output_path = os.path.join(data_root, ds_name, 'our_results', out_fname)
-        print(f"  输入路径: {parquet_path}")
-        print(f"  输出路径: {output_path}")
+        if accelerator.is_main_process:
+            print(f"  输入路径: {parquet_path}")
+            print(f"  输出路径: {output_path}")
 
         metrics = evaluate_dataset(
             model=model,
@@ -270,14 +349,17 @@ def main():
             model_cfg=model_cfg,
             infer_cfg=infer_cfg,
             output_path=output_path,
+            accelerator=accelerator,
             test_limit=test_limit,
         )
 
-        print(f"  [Done] 处理完成。样本数: {metrics['n_samples']} | "
-              f"Acc: {metrics['Acc']:.4f} | BAcc: {metrics['BAcc']:.4f} | F1: {metrics['F1']:.4f}")
-        print(f"  结果已写出: {output_path}")
+        if accelerator.is_main_process and metrics is not None:
+            print(f"  [Done] 处理完成。样本数: {metrics['n_samples']} | "
+                  f"Acc: {metrics['Acc']:.4f} | BAcc: {metrics['BAcc']:.4f} | F1: {metrics['F1']:.4f}")
+            print(f"  结果已写出: {output_path}")
 
-    print("\n[All Done] 所有数据集批量推理完毕。")
+    if accelerator.is_main_process:
+        print("\n[All Done] 所有数据集批量推理完毕。")
 
 
 if __name__ == '__main__':

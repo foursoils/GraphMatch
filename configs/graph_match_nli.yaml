@@ -23,7 +23,7 @@ nli_graph:
     device: "cuda"
 
     # DeBERTa 输入长度
-    max_length: 512
+    max_length: 1024
 
     # GMN 参数（v3：回归 v1 验证可行的 dim=256，避免 dim=512 训练不动 + 容量过剩）
     node_input_dim: 1024
@@ -43,7 +43,8 @@ nli_graph:
     dropout: 0.3
 
   training:
-    batch_size: 16
+    batch_size: 4
+    accum_steps: 4
     learning_rate: 0.00003 # 3e-5（v1 验证）
     deberta_lr_ratio: 0.3 # DeBERTa LR = 9e-6
     weight_decay: 0.05 # L2 正则强化

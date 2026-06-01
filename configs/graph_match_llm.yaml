@@ -12,7 +12,7 @@ llm_graph:
     # 推理评估的数据根目录
     data_root: "../data"
     # 推理结果输出文件名
-    output_filename: "qwen3.5_0.8b.parquet"
+    output_filename: "qwen3.5_2b.parquet"
     # 需要推理的数据集
     datasets:
       - AggreFact-CNN
@@ -26,7 +26,7 @@ llm_graph:
 
   model:
     # 学生 LLM 路径
-    llm_model_path: "../models/llms/Qwen3.5-0.8B"
+    llm_model_path: "../models/llms/Qwen3.5-2B"
     # 节点/边 Embedding 模型
     embed_model_path: "../models/embeddings/Qwen3-Embedding-0.6B"
     # 图信息注入到 LLM 的第 k 层（Qwen3.5-0.8B 的 full_attention 中间层为 11）
@@ -61,14 +61,14 @@ llm_graph:
 
   training:
     # GPU：单卡请设为 "0"，双卡请设为 "0,1"
-    gpu_ids: "0"
+    gpu_ids: "0,1"
     # 混合精度，可选 "bf16", "fp16", "no"
     mixed_precision: "bf16"
     seed: 42
     num_epochs: 10
     batch_size: 1 # 每卡 batch
-    eval_batch_size: 4 # 每卡评估，降低以保显存安全，原 8->4
-    grad_accum_steps: 16 # 单卡：1×1×16=16 等效 batch
+    eval_batch_size: 26 # 每卡评估，降低以保显存安全，原 8->4
+    grad_accum_steps: 8 # 双卡：1×2×8=16 等效 batch
     num_workers: 4 # DataLoader 并行，约单卡 4 worker
     # 双学习率：LoRA + Cross-Attn/GNN 分开
     lora_lr: 2.0e-4
@@ -85,6 +85,8 @@ llm_graph:
     train_target: "cot_and_answer"
 
   infer:
-    batch_size: 4 # 单卡推理，降低以保显存安全，原 8->4
+    # GPU：单卡请设为 "0"，双卡请设为 "0,1"
+    gpu_ids: "0,1"
+    batch_size: 32 # 单卡推理，降低以保显存安全，原 8->4
     num_workers: 8
     test_limit: 0 # 0=全量，>0=调试截断
