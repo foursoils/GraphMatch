@@ -205,6 +205,15 @@ class LLMGraphModel(nn.Module):
 
         self.llm = llm
 
+        # ---- 启用激活值检查点 (Gradient Checkpointing) ----
+        self.use_grad_ckpt = train_cfg.get('gradient_checkpointing', False)
+        if self.use_grad_ckpt:
+            print("[Init] 启用激活值检查点 (Gradient Checkpointing) 以节省显存...")
+            self.llm.gradient_checkpointing_enable()
+            if hasattr(self.llm, "enable_input_require_grads"):
+                self.llm.enable_input_require_grads()
+            self.llm.config.use_cache = False
+
         # 记录主设备
         if _dev.type == 'cuda':
             self.device_id = _dev.index if _dev.index is not None else 0
@@ -461,8 +470,9 @@ class LLMGraphModel(nn.Module):
                 return_dict=True,
             )
 
-        self._graph_kv = None  # 清理
-        self.current_delta_h_g = None  # 清理
+        if not getattr(self, "use_grad_ckpt", False):
+            self._graph_kv = None  # 清理
+            self.current_delta_h_g = None  # 清理
 
         # 6. 辅助分类 loss（GMN graph_global → 直接预测 label）
         lm_loss  = outputs.loss

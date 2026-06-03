@@ -154,9 +154,9 @@ def train():
     print(f"  总参数: {total_params:,} | 可训练: {trainable_params:,}")
 
     # ── 差异化学习率：DeBERTa 用更小 lr，GMN + 注入层用较大 lr ────────────
-    deberta_params = list(model.nli_encoder.parameters())
+    deberta_params = [p for p in model.nli_encoder.parameters() if p.requires_grad]
     other_params   = [p for p in model.parameters()
-                      if not any(p is q for q in deberta_params)]
+                      if p.requires_grad and not any(p is q for q in deberta_params)]
     lr_base   = config['training']['learning_rate']
     lr_deberta = lr_base * config['training'].get('deberta_lr_ratio', 0.1)
 

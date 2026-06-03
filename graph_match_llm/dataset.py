@@ -17,7 +17,7 @@ import torch
 import pandas as pd
 from torch.utils.data import Dataset
 from torch_geometric.data import Data, Batch
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoTokenizer
 
 _PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _PROJ_ROOT)
@@ -100,13 +100,10 @@ class LLMGraphDataset(Dataset):
         )
 
         if not self.use_precomputed:
-            print(f"[Dataset] 在线计算 Embedding: {embed_model_path}")
-            self.embed_tokenizer = AutoTokenizer.from_pretrained(
-                embed_model_path, trust_remote_code=True
+            raise FileNotFoundError(
+                f"[Dataset Error] 找不到预计算的图 embedding 缓存文件（路径：{self.embeddings_path}）。"
+                f"出于显存保护考虑，在此已禁止回退到在线实时计算模式。请检查配置文件中的 train_embed_file/val_embed_file 设置是否正确。"
             )
-            self.embed_model = AutoModel.from_pretrained(
-                embed_model_path, trust_remote_code=True
-            ).to(device).eval()
 
     def __len__(self):
         return len(self.df)
@@ -119,11 +116,8 @@ class LLMGraphDataset(Dataset):
             claim_graph_str=claim_graph_str,
             doc_graph_str=doc_graph_str,
             sample_id=sample_id,
-            embeddings_dict=getattr(self, 'embeddings_dict', None),
-            use_precomputed=self.use_precomputed,
-            embed_model=getattr(self, 'embed_model', None),
-            embed_tokenizer=getattr(self, 'embed_tokenizer', None),
-            device=self.device,
+            embeddings_dict=self.embeddings_dict,
+            use_precomputed=True,
         )
 
     # ---- Prompt 构建 ----

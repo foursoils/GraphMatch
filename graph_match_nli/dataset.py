@@ -19,7 +19,8 @@ class NLIGraphDataset(Dataset):
                  max_length: int = 512,
                  device: str = 'cpu',
                  emb_dim: int = 1024,
-                 embed_cache_path: str = None):
+                 embed_cache_path: str = None,
+                 preload_to_memory: bool = True):
         """
         :param parquet_path:         含 doc / claim / graph_claim / subgraph_doc / label 的 Parquet
         :param tokenizer:            DeBERTa tokenizer（外部传入，避免多次加载）
@@ -83,6 +84,15 @@ class NLIGraphDataset(Dataset):
                 torch.cuda.empty_cache()
             print("节点 Embedding 缓存构建完毕！")
 
+        self.preload_to_memory = preload_to_memory
+        if self.preload_to_memory:
+            print(f"  [Dataset] 正在预处理并缓存 {len(self.df)} 个样本到内存中...")
+            self.cached_samples = []
+            from tqdm import tqdm
+            for idx in tqdm(range(len(self.df)), desc="Caching samples"):
+                self.cached_samples.append(self._get_raw_item(idx))
+            print("  [Dataset] 预处理缓存完成！")
+
     @staticmethod
     def _parse(json_str) -> list:
         if not json_str:
@@ -100,7 +110,7 @@ class NLIGraphDataset(Dataset):
     def __len__(self):
         return len(self.df)
 
-    def __getitem__(self, idx):
+    def _get_raw_item(self, idx):
         row = self.df.iloc[idx]
         sample_id = row['id']
         label = int(row['label'])
@@ -142,3 +152,8 @@ class NLIGraphDataset(Dataset):
         pair.token_type_ids = token_type_ids
         
         return pair
+
+    def __getitem__(self, idx):
+        if self.preload_to_memory:
+            return self.cached_samples[idx]
+        return self._get_raw_item(idx)

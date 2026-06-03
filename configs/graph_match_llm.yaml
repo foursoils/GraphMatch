@@ -34,9 +34,9 @@ llm_graph:
     # Cross-Attention 头数
     cross_attn_heads: 8
     # 文本最大 token 数（instruction 部分）
-    max_txt_len: 12288
+    max_txt_len: 2048
     # 推理时最大生成 token 数（仅 Yes/No 时=5，生成 CoT 时=512）
-    max_new_tokens: 8192
+    max_new_tokens: 7168
 
   gmn:
     # GMN（Graph Matching Network）：claim 图和 doc 图跨图互相感知对齐
@@ -60,15 +60,17 @@ llm_graph:
       - "down_proj"
 
   training:
-    # GPU：单卡请设为 "0"，双卡请设为 "0,1"
-    gpu_ids: "0,1"
+    # GPU：单卡请设为 "0"，四卡请设为 "0,1,2,3"
+    gpu_ids: "0,1,2,3"
+    # 是否启用激活值检查点以节省显存（会使训练速度变慢约 20-30%）
+    gradient_checkpointing: true
     # 混合精度，可选 "bf16", "fp16", "no"
     mixed_precision: "bf16"
     seed: 42
     num_epochs: 10
     batch_size: 1 # 每卡 batch
-    eval_batch_size: 26 # 每卡评估，降低以保显存安全，原 8->4
-    grad_accum_steps: 8 # 双卡：1×2×8=16 等效 batch
+    eval_batch_size: 32 # 每卡评估，降低以保显存安全，原 8->4
+    grad_accum_steps: 4 # 四卡：1×4×4=16 等效 batch
     num_workers: 4 # DataLoader 并行，约单卡 4 worker
     # 双学习率：LoRA + Cross-Attn/GNN 分开
     lora_lr: 2.0e-4
@@ -85,8 +87,8 @@ llm_graph:
     train_target: "cot_and_answer"
 
   infer:
-    # GPU：单卡请设为 "0"，双卡请设为 "0,1"
-    gpu_ids: "0,1"
+    # GPU：单卡请设为 "0"，四卡请设为 "0,1,2,3"
+    gpu_ids: "0,1,2,3"
     batch_size: 32 # 单卡推理，降低以保显存安全，原 8->4
     num_workers: 8
     test_limit: 0 # 0=全量，>0=调试截断

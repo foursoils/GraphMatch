@@ -4,7 +4,7 @@ nli_graph:
     val_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/val.parquet"
     test_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/test.parquet"
     data_root: "../data"
-    output_filename: "deberta-v3-base.parquet"
+    output_filename: "deberta-v3-base-512.parquet"
     datasets:
       - AggreFact-CNN
       - AggreFact-XSum
@@ -27,7 +27,7 @@ nli_graph:
 
     # GMN 参数（v3：回归 v1 验证可行的 dim=256，避免 dim=512 训练不动 + 容量过剩）
     node_input_dim: 1024
-    node_hidden_dim: 256
+    node_hidden_dim: 512
     num_prop_layers: 3
 
     # 图信息注入位置
@@ -37,7 +37,7 @@ nli_graph:
     num_heads: 8
 
     # 冻结前 8 层 DeBERTa：只训后 4 层 + 分类头，强力压制过拟合
-    freeze_nli_layers: 8
+    freeze_nli_layers: 5
 
     # 强 dropout
     dropout: 0.3
@@ -50,7 +50,7 @@ nli_graph:
     weight_decay: 0.05 # L2 正则强化
     label_smoothing: 0.05 # 分类标签平滑，抑制模型过度自信
     warmup_ratio: 0.1 # cosine 调度前 10% steps 线性 warmup
-    num_epochs: 20 # cosine 调度配合：到末尾 LR 降到 ~0
+    num_epochs: 15 # cosine 调度配合：到末尾 LR 降到 ~0
     # 保存策略：监控 Val Loss（更准确反映泛化）
     # 同时保留 best_loss.pt（推荐）和 best_f1.pt（参考）
     monitor_metric: "val_f1" # val_loss | val_f1

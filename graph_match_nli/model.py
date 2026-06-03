@@ -72,6 +72,9 @@ class GraphCrossAttentionLayer(nn.Module):
 
         返回: [B, seq_len, hidden_size]，已加残差 + LayerNorm
         """
+        if node_batch.numel() == 0:
+            return h_k
+
         B, seq_len, _ = h_k.shape
         device = h_k.device
 
