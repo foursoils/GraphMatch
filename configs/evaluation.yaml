@@ -18,7 +18,7 @@ evaluation:
     - SCIFACT
     - pubhealth
     - summeval
-    # - minicheck
+    - minicheck
 
   # 需要评估的模型/方法列表（对应文件名，不含 .parquet 后缀）
   models:

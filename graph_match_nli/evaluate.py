@@ -67,7 +67,11 @@ def evaluate():
     if args.ckpt:
         ckpt_path = args.ckpt if os.path.isabs(args.ckpt) else resolve(args.ckpt)
     else:
-        ckpt_path = resolve(config['training']['best_loss_path'])
+        monitor = config['training'].get('monitor_metric', 'val_loss')
+        if monitor == 'val_f1':
+            ckpt_path = resolve(config['training']['best_f1_path'])
+        else:
+            ckpt_path = resolve(config['training']['best_loss_path'])
         
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"检查点不存在: {ckpt_path}")

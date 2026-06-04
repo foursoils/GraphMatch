@@ -4,7 +4,7 @@ nli_graph:
     val_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/val.parquet"
     test_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/test.parquet"
     data_root: "../data"
-    output_filename: "deberta-v3-base-512.parquet"
+    output_filename: "deberta-v3-base.parquet"
     datasets:
       - AggreFact-CNN
       - AggreFact-XSum
@@ -23,11 +23,11 @@ nli_graph:
     device: "cuda"
 
     # DeBERTa 输入长度
-    max_length: 1024
+    max_length: 4096
 
     # GMN 参数（v3：回归 v1 验证可行的 dim=256，避免 dim=512 训练不动 + 容量过剩）
     node_input_dim: 1024
-    node_hidden_dim: 512
+    node_hidden_dim: 256
     num_prop_layers: 3
 
     # 图信息注入位置
