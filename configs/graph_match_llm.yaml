@@ -62,8 +62,6 @@ llm_graph:
   training:
     # GPU：单卡请设为 "0"，四卡请设为 "0,1,2,3"
     gpu_ids: "0,1,2,3"
-    # 是否启用激活值检查点以节省显存（会使训练速度变慢约 20-30%）
-    gradient_checkpointing: true
     # 混合精度，可选 "bf16", "fp16", "no"
     mixed_precision: "bf16"
     seed: 42
@@ -72,9 +70,9 @@ llm_graph:
     eval_batch_size: 32 # 每卡评估，降低以保显存安全，原 8->4
     grad_accum_steps: 4 # 四卡：1×4×4=16 等效 batch
     num_workers: 4 # DataLoader 并行，约单卡 4 worker
-    # 双学习率：LoRA + Cross-Attn/GNN 分开
-    lora_lr: 2.0e-4
-    graph_lr: 5.0e-5 # GMN + Projector + Cross-Attn 模块
+    # 双学习率：LoRA + Cross-Attn/GNN 分开（偏保守，避免 CoT SFT 震荡）
+    lora_lr: 2.0e-5
+    graph_lr: 1.0e-5 # GMN + Projector + Cross-Attn 模块
     aux_lambda: 0.3 # 辅助分类 loss 权重（GMN 分类头，给 GMN 强梯度信号）
     weight_decay: 0.05
     warmup_ratio: 0.1
