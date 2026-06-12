@@ -1,9 +1,9 @@
 llm_graph:
 
   data:
-    # 训练集：带 CoT 字段 of parquet（由教师模型生成）
-    train_cot_file: "../data/minicheck/data_with_cot/gemma4_31b_tk.parquet"
-    # 训练集预计算 Embedding（显式指定，ID 与 train_cot_file 一一对应）
+    # 训练集：普通 data_with_graph parquet（无需 CoT）
+    train_file: "../data/minicheck/data_with_graph/gemma_26b_tk/train.parquet"
+    # 训练集预计算 Embedding（ID 与 train_file 一一对应）
     train_embed_file: "../data/embeddings/Qwen3-Embedding-0.6B/minicheck/gemma_26b_tk/train.pt"
     # 验证集：带图字段 of parquet（不需要 CoT，用来算 BAcc）
     val_file: "../data/minicheck/data_with_graph/gemma_26b_tk/val.parquet"
@@ -12,7 +12,7 @@ llm_graph:
     # 推理评估的数据根目录
     data_root: "../data"
     # 推理结果输出文件名
-    output_filename: "qwen3.5_2b.parquet"
+    output_filename: "qwen3_4b_instruct_2507.parquet"
     # 需要推理的数据集
     datasets:
       - AggreFact-CNN
@@ -25,18 +25,20 @@ llm_graph:
       - summeval
 
   model:
-    # 学生 LLM 路径
-    llm_model_path: "../models/llms/Qwen3.5-2B"
+    # 学生 LLM 路径（HuggingFace: Qwen/Qwen3-4B-Instruct-2507）
+    llm_model_path: "../models/llms/Qwen3-4B-Instruct-2507"
+    # 系统提示词
+    system_prompt_path: "../prompts/hallu_detect/system_prompt.txt"
     # 节点/边 Embedding 模型
     embed_model_path: "../models/embeddings/Qwen3-Embedding-0.6B"
-    # 图信息注入到 LLM 的第 k 层（Qwen3.5-0.8B 的 full_attention 中间层为 11）
-    inject_layer: 11
-    # Cross-Attention 头数
+    # 图信息注入层（Qwen3-4B 共 36 层、hidden=2560，取中间层 18）
+    inject_layer: 18
+    # Cross-Attention 头数（2560 / 8 = 320，需整除 llm hidden_size）
     cross_attn_heads: 8
-    # 文本最大 token 数（instruction 部分）
-    max_txt_len: 2048
-    # 推理时最大生成 token 数（仅 Yes/No 时=5，生成 CoT 时=512）
-    max_new_tokens: 7168
+    # 文本最大 token 数（instruction 部分；2507 原生 256K，训练保持 1024 即可）
+    max_txt_len: 1024
+    # answer_only 只需 1 个字符，留 4 token 余量
+    max_new_tokens: 4
 
   gmn:
     # GMN（Graph Matching Network）：claim 图和 doc 图跨图互相感知对齐
@@ -60,33 +62,31 @@ llm_graph:
       - "down_proj"
 
   training:
-    # GPU：单卡请设为 "0"，四卡请设为 "0,1,2,3"
-    gpu_ids: "0,1,2,3"
+    gpu_ids: "0,1"
     # 混合精度，可选 "bf16", "fp16", "no"
     mixed_precision: "bf16"
     seed: 42
-    num_epochs: 10
-    batch_size: 1 # 每卡 batch
-    eval_batch_size: 32 # 每卡评估，降低以保显存安全，原 8->4
-    grad_accum_steps: 4 # 四卡：1×4×4=16 等效 batch
-    num_workers: 4 # DataLoader 并行，约单卡 4 worker
-    # 双学习率：LoRA + Cross-Attn/GNN 分开（偏保守，避免 CoT SFT 震荡）
-    lora_lr: 2.0e-5
-    graph_lr: 1.0e-5 # GMN + Projector + Cross-Attn 模块
+    num_epochs: 20
+    batch_size: 2          # 每卡 batch；2×A5000(24G) 可跑 2
+    eval_batch_size: 12
+    grad_accum_steps: 4    # 全局等效 batch = 2卡×2×4 = 16
+    num_workers: 4 # Linux 有效；Windows 下代码会自动降为 0
+    # 双学习率：LoRA + Cross-Attn/GNN 分开（4B LoRA 常用 1e-5~2e-5）
+    lora_lr: 1.0e-5
+    graph_lr: 2.0e-5 # GMN + Projector + Cross-Attn 模块
     aux_lambda: 0.3 # 辅助分类 loss 权重（GMN 分类头，给 GMN 强梯度信号）
     weight_decay: 0.05
     warmup_ratio: 0.1
     patience: 3 # Early Stopping
     output_dir: "../models/llm_graph"
+    log_dir: "../log/llm_graph"
     # 验证集评估采样开关及样本量（训练时提速）
-    val_sample: true
+    val_sample: false
     val_sample_size: 300
-    # 训练时生成目标：cot_and_answer（CoT + Yes/No） 或 answer_only（仅 Yes/No）
-    train_target: "cot_and_answer"
+    train_target: "answer_only"
 
   infer:
-    # GPU：单卡请设为 "0"，四卡请设为 "0,1,2,3"
-    gpu_ids: "0,1,2,3"
-    batch_size: 32 # 单卡推理，降低以保显存安全，原 8->4
-    num_workers: 8
+    gpu_ids: "0,1"
+    batch_size: 8          # 每卡 batch；2×A5000 推理
+    num_workers: 4 # Linux 有效；Windows 下代码会自动降为 0
     test_limit: 0 # 0=全量，>0=调试截断

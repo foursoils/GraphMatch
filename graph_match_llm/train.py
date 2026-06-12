@@ -19,6 +19,7 @@ import json
 import re
 import argparse
 import random
+from datetime import datetime
 import numpy as np
 
 import torch
@@ -35,6 +36,7 @@ sys.path.insert(0, _PROJ_ROOT)
 
 from graph_match_llm.dataset import LLMGraphDataset, llm_graph_collate_fn
 from graph_match_llm.model   import LLMGraphModel
+from utils.path_utils        import resolve_num_workers
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +60,47 @@ def seed_everything(seed: int):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+
+class _TeeWriter:
+    """同时写入控制台与日志文件。"""
+
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for stream in self.streams:
+            stream.write(data)
+            stream.flush()
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
+    def isatty(self):
+        return getattr(self.streams[0], 'isatty', lambda: False)()
+
+
+def setup_train_log(log_dir: str, config_path: str, config: dict):
+    """创建 log/llm_graph/train_YYYYMMDD_HHMMSS.log，stdout 双写。"""
+    os.makedirs(log_dir, exist_ok=True)
+    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_path = os.path.join(log_dir, f'train_{ts}.log')
+    log_file = open(log_path, 'w', encoding='utf-8')
+    orig_stdout = sys.stdout
+    sys.stdout = _TeeWriter(orig_stdout, log_file)
+    print(f"[Log] 训练日志: {log_path}")
+    print(f"[Log] 配置文件: {config_path}")
+    print(f"[Log] 启动时间: {datetime.now().isoformat(timespec='seconds')}")
+    print("[Log] 配置摘要:")
+    print(yaml.dump(config, allow_unicode=True, default_flow_style=False))
+    return log_path, log_file, orig_stdout
+
+
+def teardown_train_log(log_file, orig_stdout):
+    if log_file is not None:
+        sys.stdout = orig_stdout
+        log_file.close()
 
 
 def parse_binary_pred(text: str) -> int:
@@ -196,7 +239,10 @@ def train():
     seed_everything(train_cfg.get('seed', 42))
 
     # ---- 路径解析 ----
-    train_file       = resolve(_PROJ_ROOT, data_cfg['train_cot_file'])
+    train_path = data_cfg.get('train_file') or data_cfg.get('train_cot_file')
+    if not train_path:
+        raise KeyError("配置缺少 data.train_file（或旧版 data.train_cot_file）")
+    train_file       = resolve(_PROJ_ROOT, train_path)
     val_file         = resolve(_PROJ_ROOT, data_cfg['val_file'])
     embed_path       = resolve(_PROJ_ROOT, model_cfg['embed_model_path'])
     output_dir       = resolve(_PROJ_ROOT, train_cfg['output_dir'])
@@ -219,6 +265,43 @@ def train():
     if accelerator.is_main_process:
         os.makedirs(output_dir, exist_ok=True)
 
+    log_dir = resolve(_PROJ_ROOT, train_cfg.get('log_dir', 'log/llm_graph'))
+    log_file, orig_stdout = None, sys.stdout
+    if accelerator.is_main_process:
+        _, log_file, orig_stdout = setup_train_log(log_dir, config_path, config)
+
+    try:
+        _run_training_loop(
+            accelerator=accelerator,
+            config=config,
+            train_cfg=train_cfg,
+            model_cfg=model_cfg,
+            train_file=train_file,
+            val_file=val_file,
+            embed_path=embed_path,
+            output_dir=output_dir,
+            train_embed_file=train_embed_file,
+            val_embed_file=val_embed_file,
+            grad_accum=grad_accum,
+        )
+    finally:
+        if accelerator.is_main_process:
+            teardown_train_log(log_file, orig_stdout)
+
+
+def _run_training_loop(
+    accelerator,
+    config,
+    train_cfg,
+    model_cfg,
+    train_file,
+    val_file,
+    embed_path,
+    output_dir,
+    train_embed_file,
+    val_embed_file,
+    grad_accum,
+):
     # ---- 模型初始化 ----
     accelerator.print("\n[1/4] 初始化模型...")
     model = LLMGraphModel(config, device=accelerator.device)
@@ -263,11 +346,15 @@ def train():
             val_ds = Subset(val_ds, indices)
             accelerator.print(f"[Dataset] 启用验证集采样评估，样本数: {val_sample_size}/{total_val}")
 
+    num_workers = resolve_num_workers(train_cfg.get('num_workers', 2))
+    if num_workers != train_cfg.get('num_workers', 2) and accelerator.is_main_process:
+        accelerator.print(f"[DataLoader] Windows 平台：num_workers 已自动设为 0（配置值 {train_cfg.get('num_workers')} 被忽略）")
+
     train_loader = DataLoader(
         train_ds,
         batch_size=train_cfg.get('batch_size', 1),
         shuffle=True,
-        num_workers=train_cfg.get('num_workers', 2),
+        num_workers=num_workers,
         collate_fn=llm_graph_collate_fn,
         pin_memory=True,
     )
@@ -275,7 +362,7 @@ def train():
         val_ds,
         batch_size=train_cfg.get('eval_batch_size', 4),
         shuffle=False,
-        num_workers=train_cfg.get('num_workers', 2),
+        num_workers=num_workers,
         collate_fn=llm_graph_collate_fn,
         pin_memory=True,
     )
@@ -436,6 +523,7 @@ def train():
         print(f"\n训练完成！最优 val_BAcc={best_bacc:.4f}")
         print(f"检查点: {best_ckpt}")
         print(f"训练历史: {history_path}")
+        print(f"[Log] 训练结束: {datetime.now().isoformat(timespec='seconds')}")
 
 
 if __name__ == '__main__':

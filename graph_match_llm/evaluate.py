@@ -31,6 +31,7 @@ sys.path.insert(0, _PROJ_ROOT)
 
 from graph_match_llm.dataset import LLMGraphDataset, llm_graph_collate_fn
 from graph_match_llm.model   import LLMGraphModel
+from utils.path_utils        import resolve_num_workers
 
 
 # ---------------------------------------------------------------------------
@@ -154,11 +155,13 @@ def evaluate_dataset(
         from torch.utils.data import Subset
         ds = Subset(ds, list(range(min(test_limit, len(ds)))))
 
+    num_workers = resolve_num_workers(infer_cfg.get('num_workers', 2))
+
     loader = DataLoader(
         ds,
         batch_size=infer_cfg.get('batch_size', 4),
         shuffle=False,
-        num_workers=infer_cfg.get('num_workers', 2),
+        num_workers=num_workers,
         collate_fn=llm_graph_collate_fn,
     )
 
@@ -300,6 +303,10 @@ def main():
 
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     accelerator = Accelerator(kwargs_handlers=[ddp_kwargs])
+
+    infer_workers = resolve_num_workers(infer_cfg.get('num_workers', 2))
+    if infer_workers != infer_cfg.get('num_workers', 2) and accelerator.is_main_process:
+        print(f"[DataLoader] Windows 平台：num_workers 已自动设为 0（配置值 {infer_cfg.get('num_workers')} 被忽略）")
 
     ckpt_path = args.ckpt or os.path.join(output_dir, 'best_model.pt')
     if not os.path.exists(ckpt_path):

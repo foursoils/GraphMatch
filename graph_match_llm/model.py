@@ -3,12 +3,12 @@ graph_match_llm - 模型模块
 ===========================
 架构（路线 B：中间层 Cross-Attention 注入）：
 
-  ┌─ Qwen3.5-4B (LoRA 微调) ─────────────────────────────────────┐
+  ┌─ Qwen3 + LoRA 微调 ──────────────────────────────────────────┐
   │  Embedding                                                   │
   │  Layer 0 → 1 → ... → Layer k-1                              │
-  │  Layer k  [full_attention] ──► + Cross-Attn(Q=text, KV=图节点)│  ← 注入点
-  │  Layer k+1 → ... → Layer 31                                  │
-  │  LM Head → 生成 CoT + "Therefore the answer is: Yes/No"       │
+  │  Layer k  ──► + Cross-Attn(Q=text, KV=图节点)                │  ← 注入点
+  │  Layer k+1 → ... → Layer N-1                                 │
+  │  LM Head → 生成 CoT + 0/1                                     │
   └───────────────────────────────────────────────────────────────┘
                                           ▲
                          ┌──── GNN ────────┘
@@ -117,7 +117,7 @@ class GraphCrossAttnLayer(nn.Module):
 
 class LLMGraphModel(nn.Module):
     """
-    Qwen3.5-4B + LoRA + GNN + 中间层 Cross-Attention 注入。
+    Qwen3 + LoRA + GNN + 中间层 Cross-Attention 注入。
 
     训练：forward(batch) → loss
     推理：inference(batch) → {'id', 'pred', 'label'}
@@ -251,7 +251,15 @@ class LLMGraphModel(nn.Module):
         self._register_inject_hook()
 
         # ---- 加载系统提示词 ----
-        sys_path = os.path.join(_PROJ_ROOT, "prompts", "hallu_detect", "system_prompt.txt")
+        prompt_rel = model_cfg.get(
+            'system_prompt_path',
+            os.path.join('prompts', 'hallu_detect', 'system_prompt.txt'),
+        )
+        if os.path.isabs(prompt_rel):
+            sys_path = prompt_rel
+        else:
+            cleaned  = prompt_rel.lstrip('.').lstrip('/').lstrip('\\')
+            sys_path = os.path.normpath(os.path.join(_PROJ_ROOT, cleaned))
         if os.path.exists(sys_path):
             with open(sys_path, 'r', encoding='utf-8') as f:
                 self.system_prompt = f.read().strip()
@@ -276,7 +284,7 @@ class LLMGraphModel(nn.Module):
         for attr in ['base_model', 'model']:
             if hasattr(base, attr):
                 base = getattr(base, attr)
-        # Qwen3.5 结构: model.model.layers
+        # Qwen3 结构: model.model.layers
         if hasattr(base, 'model') and hasattr(base.model, 'layers'):
             return base.model.layers
         if hasattr(base, 'layers'):
@@ -372,7 +380,7 @@ class LLMGraphModel(nn.Module):
         ]
 
     def _apply_chat_template(self, instructions: list, add_generation_prompt: bool = True):
-        """将 instruction 列表通过 tokenizer chat template 转为字符串列表。"""
+        """将 instruction 列表转为 Qwen chat prompt 字符串。"""
         prompts = []
         for inst in instructions:
             msgs = self._make_chat_messages(inst)
@@ -383,8 +391,7 @@ class LLMGraphModel(nn.Module):
                     add_generation_prompt=add_generation_prompt,
                 )
             except Exception:
-                # Fallback：无 chat template
-                txt = f"[INST] {inst} [/INST]"
+                txt = f"{self.system_prompt}\n\n{inst}\n\nAssistant:"
             prompts.append(txt)
         return prompts
 
