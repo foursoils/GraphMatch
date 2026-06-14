@@ -223,10 +223,10 @@ class LLMGraphModel(nn.Module):
         # ---- Projector ----
         self.projector = GraphProjector(gnn_cfg['hidden_dim'], llm_dim).to(_dev)
 
-        # ---- GMN 辅助分类头（直接监督 graph_global，给 GMN 强梯度信号）----
+        # ---- GMN 辅助分类头（直接监督 [g_c; g_d; g_c-g_d]，给 GMN 强梯度信号）----
         gmn_dim = gnn_cfg['hidden_dim']
         self.gmn_cls_head = nn.Sequential(
-            nn.Linear(gmn_dim, gmn_dim),
+            nn.Linear(gmn_dim * 3, gmn_dim),
             nn.GELU(),
             nn.Dropout(0.1),
             nn.Linear(gmn_dim, 2),
@@ -332,8 +332,9 @@ class LLMGraphModel(nn.Module):
         GMN 编码 claim/doc PairData，claim 与 doc 节点跨图互相对齐。
 
         返回:
-            padded      : [B, N_max, llm_dim]  供 Cross-Attention 注入
-            graph_global: [B, gmn_dim]          供辅助分类头使用
+            padded: [B, N_max, llm_dim]  供 Cross-Attention 注入
+            g_c   : [B, gmn_dim]          claim 图全局均值，供辅助分类头使用
+            g_d   : [B, gmn_dim]          doc   图全局均值，供辅助分类头使用
         """
         _dev = torch.device(f"cuda:{self.device_id}")
         pair = data['graph_pair'].to(_dev)
@@ -367,7 +368,7 @@ class LLMGraphModel(nn.Module):
         for i, s in enumerate(per_sample):
             padded[i, :s.size(0)] = s
 
-        return padded, graph_global  # [B,N_max,llm_dim], [B,gmn_dim]
+        return padded, g_c, g_d  # [B,N_max,llm_dim], [B,gmn_dim], [B,gmn_dim]
 
     # -----------------------------------------------------------------------
     # 辅助：Qwen chat template
@@ -418,7 +419,7 @@ class LLMGraphModel(nn.Module):
 
         # 1. 图编码，暂存给 hook 用
         with self.maybe_autocast():
-            self._graph_kv, graph_global = self._encode_graphs(batch)
+            self._graph_kv, g_c, g_d = self._encode_graphs(batch)
 
         # 2. 构建 full prompt（instruction + target）
         prompts = self._apply_chat_template(batch['instruction'], add_generation_prompt=True)
@@ -471,13 +472,14 @@ class LLMGraphModel(nn.Module):
         self._graph_kv = None
         self.current_delta_h_g = None
 
-        # 6. 辅助分类 loss（GMN graph_global → 直接预测 label）
+        # 6. 辅助分类 loss（[g_c; g_d; g_c-g_d] → 直接预测 label）
         lm_loss  = outputs.loss
         aux_loss = torch.tensor(0.0, device=lm_loss.device)
-        if 'label' in batch and graph_global is not None:
+        if 'label' in batch and g_c is not None:
             label_tensor = torch.tensor(batch['label'], dtype=torch.long,
-                                        device=graph_global.device)
-            logits   = self.gmn_cls_head(graph_global.to(lm_loss.device))
+                                        device=g_c.device)
+            graph_cls_feat = torch.cat([g_c, g_d, g_c - g_d], dim=-1).to(lm_loss.device)
+            logits   = self.gmn_cls_head(graph_cls_feat)
             aux_loss = nn.functional.cross_entropy(logits, label_tensor)
 
         aux_lambda = getattr(self, '_aux_lambda', 0.3)
@@ -495,7 +497,7 @@ class LLMGraphModel(nn.Module):
         _dev = torch.device(f"cuda:{self.device_id}")
 
         with self.maybe_autocast():
-            self._graph_kv, _ = self._encode_graphs(batch)
+            self._graph_kv, _, _ = self._encode_graphs(batch)
 
         prompts = self._apply_chat_template(batch['instruction'], add_generation_prompt=True)
         enc = self.tokenizer(

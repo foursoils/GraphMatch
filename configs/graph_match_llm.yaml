@@ -68,7 +68,7 @@ llm_graph:
     seed: 42
     num_epochs: 20
     batch_size: 2          # 每卡 batch；2×A5000(24G) 可跑 2
-    eval_batch_size: 12
+    eval_batch_size: 24
     grad_accum_steps: 4    # 全局等效 batch = 2卡×2×4 = 16
     num_workers: 4 # Linux 有效；Windows 下代码会自动降为 0
     # 双学习率：LoRA + Cross-Attn/GNN 分开（4B LoRA 常用 1e-5~2e-5）
