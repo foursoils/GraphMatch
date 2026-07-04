@@ -1,0 +1,45 @@
+minicheck:
+  merge:
+    raw_dir: "../data/minicheck/raw"
+    processed_dir: "../data/minicheck/processed_data"
+    merged_output_name: "mc_with_id.parquet"
+
+  split:
+    input_parquet: "../data/minicheck/processed_data/mc_with_id.parquet"
+    train_parquet: "../data/minicheck/processed_data/train.parquet"
+    val_parquet:   "../data/minicheck/processed_data/val.parquet"
+    test_parquet:  "../data/minicheck/processed_data/test.parquet"
+    train_ratio: 0.6
+    val_ratio:   0.2
+    test_ratio:  0.2
+    seed: 42
+
+embedding_preparation:
+  embed_model_path: "../models/embeddings/Qwen3-Embedding-0.6B"
+  device: "cuda"
+  batch_size: 512
+  data_root: "../data"
+  graph_generators:
+    - gemma_26b_tk
+    # - claude_3.5
+  datasets:
+    - AggreFact-CNN
+    - AggreFact-XSum
+    - COVID-Fact
+    - ExpertQA
+    - Reveal
+    - SCIFACT
+    - pubhealth
+    - summeval
+    - minicheck
+  minicheck:
+    name: "minicheck"
+    graph_generators:
+      - gemma_26b_tk
+      # - claude_3.5
+      # - gemma_4b
+      # - qwen_9b_tk
+    splits:
+      - train
+      - val
+      - test

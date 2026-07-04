@@ -1,0 +1,60 @@
+nli_graph:
+  data:
+    train_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/train.parquet"
+    val_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/val.parquet"
+    test_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/test.parquet"
+    data_root: "../data"
+    output_filename: "deberta-v3-large.parquet"
+    datasets:
+      - AggreFact-CNN
+      - AggreFact-XSum
+      - COVID-Fact
+      - ExpertQA
+      - SCIFACT
+      - minicheck
+      - pubhealth
+      - summeval
+
+  model:
+    # NLI 编码器（DeBERTa-v3-large，3 分类 NLI 微调版）
+    nli_model_path: "../models/nlis/DeBERTa-v3-large"
+    # 节点 Embedding 模型
+    embedding_model_path: "../models/embeddings/Qwen3-Embedding-0.6B"
+    device: "cuda"
+
+    # DeBERTa 输入长度（large 模型 config 中 max_position_embeddings=512）
+    max_length: 1024
+
+    # GMN 参数（v3：回归 v1 验证可行的 dim=256，避免 dim=512 训练不动 + 容量过剩）
+    node_input_dim: 1024
+    node_hidden_dim: 512
+    num_prop_layers: 3
+
+    # 图信息注入位置（large 共 24 层，取中间偏后）
+    inject_layer_k: 12
+
+    # Cross-Attention 头数（需整除 hidden_size=1024）
+    num_heads: 16
+
+    # 冻结前 16 层 DeBERTa：只训后 8 层 + 分类头
+    freeze_nli_layers: 16
+
+    # 强 dropout
+    dropout: 0.3
+
+  training:
+    batch_size: 1
+    accum_steps: 16
+    learning_rate: 0.00002 # 2e-5（large 模型略低于 base）
+    deberta_lr_ratio: 0.2 # DeBERTa LR = 4e-6
+    weight_decay: 0.05 # L2 正则强化
+    label_smoothing: 0.05 # 分类标签平滑，抑制模型过度自信
+    warmup_ratio: 0.1 # cosine 调度前 10% steps 线性 warmup
+    num_epochs: 15 # cosine 调度配合：到末尾 LR 降到 ~0
+    # 保存策略：监控 Val Loss（更准确反映泛化）
+    # 同时保留 best_loss.pt（推荐）和 best_f1.pt（参考）
+    monitor_metric: "val_f1" # val_loss | val_f1
+    patience: 4 # 连续 4 epoch 监控指标不改善则停
+    best_loss_path: "../models/nli_graph/best_loss.pt"
+    best_f1_path: "../models/nli_graph/best_f1.pt"
+    seed: 42

@@ -1,0 +1,17 @@
+# Byte-compiled / optimized / DLL files
+**/__pycache__/
+*.pyc
+
+# PyTorch checkpoints and large binaries
+*.pt
+*.pth
+*.bin
+*.zip
+*.gz
+
+# Exclude contents of third-level directories under the models/ directory
+models/*/*/
+
+# Exclude all contents of the data/embeddings/ directory except the .gitkeep file
+data/embeddings/*
+!data/embeddings/.gitkeep
