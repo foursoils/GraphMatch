@@ -5,14 +5,19 @@ NLI-Graph 融合幻觉检测模型
   1. GMN 子图匹配（复用 graph_match/model.py 的 GMNPropLayer）
        - 输入: Claim 图 G_C、Doc 子图 G_D（SentenceTransformer 嵌入）
        - 输出: 节点级对齐向量 [N, node_hidden_dim]、图级全局向量 [B, node_hidden_dim]
-  2. NLI 编码器（DeBERTa-v3，2/3 分类 NLI 微调版）
+  2. NLI 编码器（DeBERTa-v3 backbone）
+       - 支持两种权重来源：
+           a) 已在 NLI/事实核查任务上微调过的分类 checkpoint（如 MiniCheck 系列）
+              → config 里有 architectures=XxxForSequenceClassification，可复用其 id2label 语义与分类头权重
+           b) 纯预训练 backbone（如裸的 microsoft/deberta-v3-large，无分类头、无 id2label）
+              → 分类头随机初始化，标签约定直接对齐数据集（1=support/0=hallucination）
        - 前 k 层正常运行，得到隐状态 h_k [B, seq, hidden_size]
        - Cross-Attention: query=h_k, key/value=节点嵌入（投影到 hidden_size）
        - LayerNorm(h_k + F(h_k))  ← 节点信息注入 + 残差
        - LayerNorm(h  + h_graph_global_proj)  ← 图级全局注入 + 残差
        - 后 L-k 层继续运行
-  3. NLI 分类头（复用预训练权重）
-       - [CLS] 向量 → Linear → num_labels（entailment=支持 / contradiction 或 not_entailment=幻觉）
+  3. NLI 分类头（视权重来源决定复用还是随机初始化，见上）
+       - [CLS] 向量 → Linear → num_labels（entailment=支持 / hallucination=幻觉）
 """
 import sys
 import os
@@ -28,7 +33,21 @@ from transformers import AutoModel, AutoConfig
 
 
 from utils.gmn import GMNEncoder
-from nli_labels import resolve_nli_label_spec
+from nli_labels import resolve_nli_label_spec, default_label_spec
+from utils.path_utils import log_rank0
+
+
+def _is_finetuned_classifier_checkpoint(config) -> bool:
+    """
+    判断本地权重是否为已在分类任务上微调过的 checkpoint。
+
+    纯预训练 backbone（如裸的 microsoft/deberta-v3-large）的 config.json 里
+    不会有 'architectures': [...ForSequenceClassification] 字段，
+    此时 config.id2label 只是 transformers 给的占位符 {0: 'LABEL_0', 1: 'LABEL_1'}，
+    没有真实语义，不能拿来做标签映射，也没有分类头权重可复用。
+    """
+    architectures = getattr(config, 'architectures', None) or []
+    return any('ForSequenceClassification' in a for a in architectures)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -137,7 +156,8 @@ class GraphCrossAttentionLayer(nn.Module):
 # ────────────────────────────────────────────────────────────────────────────
 class NLIGraphClassifier(nn.Module):
     """
-    GMN + DeBERTa-v3（NLI 微调版）融合幻觉检测模型
+    GMN + DeBERTa-v3 融合幻觉检测模型
+    （DeBERTa 侧既可以是已微调的 NLI 分类 checkpoint，也可以是纯预训练 backbone + 随机分类头）
 
     注入位置 inject_layer_k: DeBERTa 第 k 层（1-indexed）之后插入 Cross-Attention
     """
@@ -150,11 +170,15 @@ class NLIGraphClassifier(nn.Module):
                  inject_layer_k: int = 6,
                  num_heads: int = 8,
                  dropout: float = 0.1,
-                 freeze_nli_layers: int = 0):
+                 freeze_nli_layers: int = 0,
+                 num_labels: int = 2):
         """
-        :param nli_model_path:    本地 DeBERTa NLI 模型路径
+        :param nli_model_path:    本地 DeBERTa 模型路径（可以是纯预训练 backbone，也可以是已微调的 NLI 分类 checkpoint）
         :param inject_layer_k:    在 DeBERTa 第 k 层后注入图信息（base=12 层, large=24 层）
         :param freeze_nli_layers: 冻结 DeBERTa 前 N 层（0 = 全部参与训练）
+        :param num_labels:        当 nli_model_path 是纯预训练 backbone（无 id2label 语义）时使用的分类数，
+                                   目前只支持二分类；若 nli_model_path 是已微调的分类 checkpoint，
+                                   实际类别数以其 config.id2label 为准，此参数会被忽略
         """
         super().__init__()
         self.inject_layer_k = inject_layer_k
@@ -173,13 +197,25 @@ class NLIGraphClassifier(nn.Module):
         self.nli_encoder = AutoModel.from_pretrained(nli_model_path, config=config)
         hidden_size = config.hidden_size
         self.num_hidden_layers = config.num_hidden_layers
-        self.label_spec = resolve_nli_label_spec(config.id2label)
+
+        # 是否为已微调的分类 checkpoint，决定标签映射来源与分类头是否可复用
+        self._is_finetuned_cls = _is_finetuned_classifier_checkpoint(config)
+        if self._is_finetuned_cls:
+            self.label_spec = resolve_nli_label_spec(config.id2label)
+            log_rank0(f"  检测到已微调的 NLI 分类 checkpoint，复用其 id2label 语义: {config.id2label}")
+        else:
+            self.label_spec = default_label_spec(num_labels)
+            log_rank0(
+                "  检测到纯预训练 backbone（无分类头/无 id2label），分类头将随机初始化，"
+                f"采用与数据集一致的标签约定: entailment(支持)={self.label_spec.entailment_id}, "
+                f"hallucination(幻觉)={self.label_spec.hallucination_id}"
+            )
         num_labels = self.label_spec.num_labels
         if not (1 <= inject_layer_k <= self.num_hidden_layers):
             raise ValueError(
                 f"inject_layer_k={inject_layer_k} 超出范围，应在 1~{self.num_hidden_layers} 之间"
             )
-        print(
+        log_rank0(
             f"  NLI 编码器: hidden_size={hidden_size}, layers={self.num_hidden_layers}, "
             f"num_labels={num_labels}, inject_layer_k={inject_layer_k}"
         )
@@ -214,7 +250,16 @@ class NLIGraphClassifier(nn.Module):
         self._try_load_classifier_weights(nli_model_path)
 
     def _try_load_classifier_weights(self, model_path: str):
-        """尝试从预训练 NLI 模型加载分类头权重"""
+        """
+        尝试从预训练 NLI 分类 checkpoint 复用分类头权重。
+
+        只有当 nli_model_path 本身就是已微调的分类 checkpoint（config 里有
+        XxxForSequenceClassification）时才有意义；纯预训练 backbone 没有分类头，
+        直接跳过，避免误加载一份完整模型只为拿到一个同样是随机初始化的"假分类头"。
+        """
+        if not self._is_finetuned_cls:
+            log_rank0("[INFO] 当前权重是纯预训练 backbone，无分类头可复用，分类头使用随机初始化")
+            return
         try:
             from transformers import AutoModelForSequenceClassification
             pretrained = AutoModelForSequenceClassification.from_pretrained(model_path)
@@ -224,10 +269,10 @@ class NLIGraphClassifier(nn.Module):
                 # 若权重形状匹配则加载
                 if cls_state['weight'].shape == self.classifier.weight.shape:
                     self.classifier.load_state_dict(cls_state)
-                    print("[OK] 已复用预训练 NLI 分类头权重")
+                    log_rank0("[OK] 已复用预训练 NLI 分类头权重")
             del pretrained
         except Exception as e:
-            print(f"[WARN] 分类头权重复用失败（将随机初始化）: {e}")
+            log_rank0(f"[WARN] 分类头权重复用失败（将随机初始化）: {e}")
 
     def forward(self, input_ids: torch.Tensor,
                 attention_mask: torch.Tensor,

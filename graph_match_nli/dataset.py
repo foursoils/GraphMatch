@@ -10,6 +10,7 @@ if _PROJ_ROOT not in sys.path:
     sys.path.insert(0, _PROJ_ROOT)
 
 from utils.dataset_utils import PairData, build_pair_data, load_precomputed_embeddings
+from utils.path_utils import is_rank0, log_rank0
 
 class NLIGraphDataset(Dataset):
     def __init__(self,
@@ -44,7 +45,7 @@ class NLIGraphDataset(Dataset):
             self.doc_col = 'graph_doc'
         else:
             raise ValueError("数据中既无 'subgraph_doc' 也无 'graph_doc' 列")
-        print(f"  使用 doc 图列: {self.doc_col}")
+        log_rank0(f"  使用 doc 图列: {self.doc_col}")
 
         # ── 优先载入预计算 Embedding ─────────────────────────────────────
         self.embeddings_dict, self.use_precomputed, self.embeddings_path = load_precomputed_embeddings(
@@ -56,7 +57,7 @@ class NLIGraphDataset(Dataset):
         # ── 批量构建 Embedding 缓存 (在线计算 fallback) ────────────────────
         if not self.use_precomputed:
             from sentence_transformers import SentenceTransformer
-            print("收集唯一文本，批量编码节点 Embedding...")
+            log_rank0("收集唯一文本，批量编码节点 Embedding...")
             
             # 预解析三元组以提取所有文本
             claim_triplets = [self._parse(r['graph_claim']) for _, r in self.df.iterrows()]
@@ -67,13 +68,13 @@ class NLIGraphDataset(Dataset):
                 for tri in trips:
                     all_texts.update(tri)
             all_texts = list(all_texts)
-            print(f"共 {len(all_texts)} 个唯一文本，开始编码...")
+            log_rank0(f"共 {len(all_texts)} 个唯一文本，开始编码...")
 
             emb_model = SentenceTransformer(embedding_model_path, device=device)
             embeddings = emb_model.encode(
                 all_texts, batch_size=256,
                 normalize_embeddings=True,
-                show_progress_bar=True
+                show_progress_bar=is_rank0()
             )
             self.text_emb_cache = {t: emb for t, emb in zip(all_texts, embeddings)}
             
@@ -82,16 +83,16 @@ class NLIGraphDataset(Dataset):
             import gc; gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            print("节点 Embedding 缓存构建完毕！")
+            log_rank0("节点 Embedding 缓存构建完毕！")
 
         self.preload_to_memory = preload_to_memory
         if self.preload_to_memory:
-            print(f"  [Dataset] 正在预处理并缓存 {len(self.df)} 个样本到内存中...")
+            log_rank0(f"  [Dataset] 正在预处理并缓存 {len(self.df)} 个样本到内存中...")
             self.cached_samples = []
             from tqdm import tqdm
-            for idx in tqdm(range(len(self.df)), desc="Caching samples"):
+            for idx in tqdm(range(len(self.df)), desc="Caching samples", disable=not is_rank0()):
                 self.cached_samples.append(self._get_raw_item(idx))
-            print("  [Dataset] 预处理缓存完成！")
+            log_rank0("  [Dataset] 预处理缓存完成！")
 
     @staticmethod
     def _parse(json_str) -> list:

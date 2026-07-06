@@ -10,7 +10,7 @@ NLI-Graph 融合模型评估与批量推理脚本
 用法：
   python graph_match_nli/evaluate.py
   python graph_match_nli/evaluate.py --dataset minicheck
-  python graph_match_nli/evaluate.py --ckpt models/nli_graph/best_loss.pt
+  python graph_match_nli/evaluate.py --ckpt models/graph_match/best_f1.pt
 """
 
 import os
@@ -40,7 +40,7 @@ def parse_args():
     p.add_argument('--config', default=None,
                    help="配置文件路径。默认使用 configs/graph_match_nli.yaml")
     p.add_argument('--ckpt', default=None,
-                   help="检查点文件路径。默认使用 config 中的 best_loss_path")
+                   help="检查点文件路径。默认使用 config 中的 best_f1_path")
     p.add_argument('--dataset', default=None,
                    help="指定仅对某个数据集进行推理（如 minicheck）")
     return p.parse_args()
@@ -68,11 +68,7 @@ def evaluate():
     if args.ckpt:
         ckpt_path = args.ckpt if os.path.isabs(args.ckpt) else resolve(args.ckpt)
     else:
-        monitor = config['training'].get('monitor_metric', 'val_loss')
-        if monitor == 'val_f1':
-            ckpt_path = resolve(config['training']['best_f1_path'])
-        else:
-            ckpt_path = resolve(config['training']['best_loss_path'])
+        ckpt_path = resolve(config['training']['best_f1_path'])
         
     if not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"检查点不存在: {ckpt_path}")
@@ -99,6 +95,8 @@ def evaluate():
         inject_layer_k    = config['model']['inject_layer_k'],
         num_heads         = config['model']['num_heads'],
         dropout           = config['model']['dropout'],
+        freeze_nli_layers = config['model'].get('freeze_nli_layers', 0),
+        num_labels        = config['model'].get('num_labels', 2),
     ).to(device)
     model.load_state_dict(ckpt['model_state_dict'])
     model = model.float()
