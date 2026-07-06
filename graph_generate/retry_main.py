@@ -1,6 +1,5 @@
 import os
 import sys
-import yaml
 import json
 import argparse
 import pandas as pd
@@ -13,10 +12,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from utils.path_utils import resolve_path
 from utils.prompt_utils import PromptManager
 from utils.model_engine import LocalQwenExtractor
+from utils.io_utils import load_yaml_config
 
-def load_config(config_path: str) -> dict:
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+load_config = load_yaml_config
 
 def process_retry_dataset(
     dataset_name: str,

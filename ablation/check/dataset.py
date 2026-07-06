@@ -7,97 +7,16 @@ GraphCheck 消融实验 - 数据集处理模块
 """
 
 import os
-import json
+import sys
 import torch
 import pandas as pd
 from torch.utils.data import Dataset
 from torch_geometric.data import Data, Batch
 from transformers import AutoModel, AutoTokenizer
 
-
-def get_embedding_path(parquet_path: str, embed_model_path: str) -> str:
-    """
-    根据 parquet 路径和 embed 模型路径自动计算预计算特征 .pt 文件的集中存储路径。
-    支持 Windows 和 Linux 路径格式。
-    """
-    model_name = os.path.basename(embed_model_path)
-    
-    # 统一并规范化路径
-    norm_path = os.path.normpath(parquet_path)
-    parts = norm_path.split(os.sep)
-    
-    # 查找 'data' 目录的索引
-    try:
-        data_idx = parts.index('data')
-        base_parts = parts[:data_idx+1]
-        sub_parts = parts[data_idx+1:]
-    except ValueError:
-        return None
-        
-    if not sub_parts:
-        return None
-        
-    # 判断是否是 minicheck 的特殊结构
-    # data/minicheck/data_with_graph/generator/split.parquet
-    if len(sub_parts) >= 4 and sub_parts[0] == 'minicheck':
-        generator = sub_parts[2]
-        split_file = sub_parts[3]
-        split_name = os.path.splitext(split_file)[0]
-        new_parts = base_parts + ['embeddings', model_name, 'minicheck', generator, f"{split_name}.pt"]
-    # 常规数据集结构
-    # data/dataset_name/data_with_graph/generator.parquet
-    elif len(sub_parts) >= 3:
-        dataset_name = sub_parts[0]
-        gen_file = sub_parts[2]
-        gen_name = os.path.splitext(gen_file)[0]
-        new_parts = base_parts + ['embeddings', model_name, dataset_name, f"{gen_name}.pt"]
-    else:
-        return None
-        
-    return os.path.normpath(os.path.sep.join(new_parts))
-
-
-def textualize_graph(graph_str: str):
-    """
-    将 JSON 格式的图字符串解析为节点和边。
-    返回: nodes_df (含 node_id, node_attr), edges_df (含 src, edge_attr, dst)
-    """
-    if not graph_str or not isinstance(graph_str, str):
-        return pd.DataFrame(columns=['node_attr', 'node_id']), pd.DataFrame(columns=['src', 'edge_attr', 'dst'])
-    
-    try:
-        triples = json.loads(graph_str)
-    except Exception:
-        triples = []
-
-    if not triples:
-        return pd.DataFrame(columns=['node_attr', 'node_id']), pd.DataFrame(columns=['src', 'edge_attr', 'dst'])
-
-    nodes_dict = {}
-    edges_list = []
-
-    for tri in triples:
-        if len(tri) != 3: continue
-        src, edge_attr, dst = tri
-
-        src = src.lower().strip() if src else " "
-        edge_attr = edge_attr.lower().strip() if edge_attr else " "
-        dst = dst.lower().strip() if dst else " "
-
-        if src not in nodes_dict:
-            nodes_dict[src] = len(nodes_dict)
-        if dst not in nodes_dict:
-            nodes_dict[dst] = len(nodes_dict)
-
-        edges_list.append({
-            'src': nodes_dict[src],
-            'edge_attr': edge_attr,
-            'dst': nodes_dict[dst]
-        })
-
-    nodes_df = pd.DataFrame(nodes_dict.items(), columns=['node_attr', 'node_id'])
-    edges_df = pd.DataFrame(edges_list)
-    return nodes_df, edges_df
+# Add project root to sys.path so we can reuse the shared graph utilities
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from utils.dataset_utils import get_embedding_path, textualize_graph
 
 
 class GraphCheckDataset(Dataset):

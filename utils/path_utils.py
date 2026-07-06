@@ -1,5 +1,4 @@
 import os
-import sys
 
 def get_project_root() -> str:
     """
@@ -21,13 +20,6 @@ def resolve_path(rel_or_abs: str) -> str:
     # Strip leading dots and separators to resolve relative to root
     cleaned = rel_or_abs.lstrip('.').lstrip('/').lstrip('\\')
     return os.path.normpath(os.path.join(get_project_root(), cleaned))
-
-
-def resolve_num_workers(configured: int) -> int:
-    """解析 DataLoader num_workers；Windows 下多进程易卡死，强制为 0。"""
-    if sys.platform == 'win32':
-        return 0
-    return configured
 
 
 def is_rank0() -> bool:

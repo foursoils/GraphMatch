@@ -15,17 +15,21 @@ GraphCheck 消融实验 - 推理程序
 """
 
 import os
-import re
-import json
+import sys
 import argparse
 
-import yaml
 import torch
 import pandas as pd
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 
 from model.graphcheck import GraphCheck
+
+# Add project root to sys.path so we can reuse the shared utilities
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from utils.path_utils import resolve_path as _resolve_path_from_root
+from utils.io_utils import load_yaml_config, save_parquet_append
+from utils.model_engine import parse_binary_label
 
 
 # ---------------------------------------------------------------------------
@@ -43,26 +47,12 @@ GRAPH_SUBDIR = 'data_with_graph'
 
 def load_config(config_path: str) -> dict:
     """加载 YAML，返回 ablation.check 节点。"""
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)['ablation']['check']
+    return load_yaml_config(config_path)['ablation']['check']
 
 
 def resolve_path(base_dir: str, rel_or_abs: str) -> str:
-    if os.path.isabs(rel_or_abs):
-        return rel_or_abs
-    cleaned = rel_or_abs.lstrip('.').lstrip('/').lstrip('\\')
-    return os.path.normpath(os.path.join(base_dir, cleaned))
-
-
-def parse_binary_label(raw: str) -> int:
-    """
-    从模型生成文本中提取 0/1 标签（与 kg 模块策略保持一致）。
-    取最后一个出现的 \\b[01]\\b；匹配失败返回 2（解析失败）。
-    """
-    if not raw:
-        return 2
-    matches = re.findall(r'\b([01])\b', raw.strip())
-    return int(matches[-1]) if matches else 2
+    """将相对路径解析为绝对路径（base_dir 已固定为项目根目录，故直接复用共享实现）。"""
+    return _resolve_path_from_root(rel_or_abs)
 
 
 def load_checkpoint(model: GraphCheck, ckpt_path: str):
@@ -74,14 +64,7 @@ def load_checkpoint(model: GraphCheck, ckpt_path: str):
     return model
 
 
-def save_results(records: list, output_path: str):
-    """将新记录追加到已有 parquet 文件，不存在则新建。"""
-    new_df = pd.DataFrame(records)
-    if os.path.exists(output_path):
-        existing_df = pd.read_parquet(output_path)
-        pd.concat([existing_df, new_df], ignore_index=True).to_parquet(output_path, index=False)
-    else:
-        new_df.to_parquet(output_path, index=False)
+save_results = save_parquet_append
 
 
 # ---------------------------------------------------------------------------

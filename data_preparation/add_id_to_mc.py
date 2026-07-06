@@ -1,11 +1,10 @@
 import pandas as pd
-import yaml
 import glob
 import os
+import sys
 
-def load_config(config_path):
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.io_utils import load_yaml_config as load_config
 
 def main():
     # 加载配置文件

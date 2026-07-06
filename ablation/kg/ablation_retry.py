@@ -12,7 +12,6 @@
 import os
 import sys
 import argparse
-import yaml
 import pandas as pd
 
 # Add project root to sys.path
@@ -21,14 +20,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 from utils.path_utils import resolve_path
 from utils.prompt_utils import AblationPromptManager
 from utils.model_engine import VLLMEngine, parse_binary_label
+from utils.io_utils import load_yaml_config
 
 
 def load_config(config_path: str) -> dict:
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)['ablation']['kg']
-
-
-# Removed local resolve_path to use utils.path_utils.resolve_path
+    return load_yaml_config(config_path)['ablation']['kg']
 
 
 def main():

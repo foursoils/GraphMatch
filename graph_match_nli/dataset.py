@@ -9,7 +9,7 @@ _PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJ_ROOT not in sys.path:
     sys.path.insert(0, _PROJ_ROOT)
 
-from utils.dataset_utils import PairData, build_pair_data, load_precomputed_embeddings
+from utils.dataset_utils import build_pair_data, load_precomputed_embeddings
 from utils.path_utils import is_rank0, log_rank0
 
 class NLIGraphDataset(Dataset):

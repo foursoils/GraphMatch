@@ -15,9 +15,7 @@ NLI-Graph 融合模型评估与批量推理脚本
 
 import os
 import sys
-import yaml
 import argparse
-import numpy as np
 import pandas as pd
 import torch
 from torch_geometric.loader import DataLoader
@@ -28,11 +26,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from model import NLIGraphClassifier
 from dataset import NLIGraphDataset
 from nli_labels import nli_logits_to_support_preds, nli_logits_to_support_probs
+from utils.io_utils import load_yaml_config
 
-
-def load_config(path: str) -> dict:
-    with open(path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+load_config = load_yaml_config
 
 
 def parse_args():
@@ -169,9 +165,10 @@ def evaluate():
         # 写出预测结果
         out_df = test_ds.df.copy()
         out_df['pred_label'] = all_preds
+        out_df['pred_prob'] = all_probs
         
-        # 只保留 id, claim, doc, label 和 pred_label
-        cols_to_keep = ['id', 'claim', 'doc', 'label', 'pred_label']
+        # 只保留 id, claim, doc, label, pred_label 和 pred_prob
+        cols_to_keep = ['id', 'claim', 'doc', 'label', 'pred_label', 'pred_prob']
         cols_to_keep = [col for col in cols_to_keep if col in out_df.columns]
         out_df = out_df[cols_to_keep]
 

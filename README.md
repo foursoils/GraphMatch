@@ -15,8 +15,6 @@ GraphMatch/
 ├── contrast_experiment/       # 对比实验代码
 │   ├── detect_main.py
 │   └── detect_retry.py
-├── cot_generation/            # 思维链 (CoT) 生成脚本
-│   └── generation_main.py
 ├── data/                      # 数据集目录 (包含各个数据集的 parquet 文件和 embeddings)
 ├── data_preparation/          # 数据预处理脚本
 │   ├── add_id_to_mc.py
@@ -27,19 +25,18 @@ GraphMatch/
 ├── graph_generate/            # 图谱生成引擎
 │   ├── extraction_main.py
 │   └── retry_main.py
-├── graph_match/               # 图匹配模型及训练代码
+├── graph_match_nli/           # 图匹配模型及训练代码 (GMN + DeBERTa NLI)
 │   ├── dataset.py
 │   ├── evaluate.py
 │   ├── model.py
+│   ├── nli_labels.py
 │   └── train.py
 ├── models/                    # 本地模型目录 (权重文件已通过规则忽略)
 ├── prompts/                   # System / User 提示词模板
 │   ├── ablation/
-│   ├── cot_gen/
 │   ├── graph_gen/
 │   └── hallu_detect/
 ├── utils/                     # 辅助工具包 (模型调用、路径管理、提示词加载等)
-├── docker-compose.yml         # Docker 容器配置
 ├── LICENSE                    # 开源许可证
 ├── pip_list.txt               # 环境 pip 列表记录
 └── requirements.txt           # 项目 Python 依赖项

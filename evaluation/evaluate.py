@@ -15,7 +15,6 @@ import os
 import sys
 import argparse
 
-import yaml
 import pandas as pd
 import numpy as np
 
@@ -23,6 +22,7 @@ import numpy as np
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.path_utils import resolve_path
+from utils.io_utils import load_yaml_config
 
 
 # ---------------------------------------------------------------------------
@@ -30,11 +30,7 @@ from utils.path_utils import resolve_path
 # ---------------------------------------------------------------------------
 
 def load_config(config_path: str) -> dict:
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)['evaluation']
-
-
-# Removed local resolve_path to use utils.path_utils.resolve_path
+    return load_yaml_config(config_path)['evaluation']
 
 
 def compute_bacc(y_true: np.ndarray, y_pred: np.ndarray) -> dict:

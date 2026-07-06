@@ -1,65 +1,103 @@
-以下是针对**基于图匹配网络（GMN）的多模态双重注入大语言模型（LLM）幻觉检测方案**的完整架构与技术说明文段，可直接用于论文的架构设计（Methodology）章节或技术报告中：
+以下是针对**基于图匹配网络（GMN）与 NLI 编码器双重注入的事实核查模型（NLI-Graph）**的完整架构与技术说明文段，可直接用于论文的架构设计（Methodology）章节或技术报告中：
 
-## 基于GMN双重注入的LLM事实核查与纠偏架构说明
+## 基于 GMN 双重注入的 NLI 事实核查架构说明
 
-本方案提出了一种新颖的 **宏观-微观协同纠偏机制（Macro-Micro Collaborative Correction）** ，旨在利用图匹配网络（GMN）提取的高维结构化拓扑特征，动态指导大语言模型（LLM）的思维链（CoT）推理并抑制幻觉生成。方案整体采用双路异构特征融合设计，将待检测的断言图（**$G_{\text{claim}}$**）与参考文档图（**$G_{\text{doc}}$**）输入预训练的GMN中。在流经LLM第16层及以后的解码计算时，系统分别从“图级全局拓扑冲突”与“节点级细粒度实体冲突”两个维度，通过不同的数学通路对大模型进行“双重注入”微调。
+本方案提出了一种 **宏观-微观协同纠偏机制（Macro-Micro Collaborative Correction）** ，将图匹配网络（GMN）提取的结构化拓扑特征注入预训练的 NLI 编码器（DeBERTa-v3），用于判断声明（claim）是否被参考文档（doc）所支持。与将图信息注入自回归大语言模型（LLM）思维链的方案不同，本架构以 **自然语言推理（NLI）分类范式** 为骨干：输入为 `[CLS] doc [SEP] claim [SEP]` 的句对编码，输出为二分类 logits（支持 / 幻觉），更适合高效、可复现的事实核查判别任务。
 
-### 1. 通路一：基于图级差异向量的“全局自注意力偏置”注入（Macro-Level）
+整体采用双路异构特征融合设计：待检测的断言图（**$G_{\text{claim}}$**）与参考文档子图（**$G_{\text{doc}}$**）经 GMN 跨图传播后，在 DeBERTa 第 **$k$** 层（Self-Attention 之后、FFN 之前）分别从"图级全局拓扑差异"与"节点级细粒度实体对齐"两个维度完成双重注入。
 
-图级注入旨在从宏观维度让大模型感知当前生成的文本推理与参考知识库之间的整体事实偏离度。
+### 0. 输入表示与 GMN 编码
 
-GMN最终聚合输出两个全图级向量：**$h_{\text{claim}}, h_{\text{doc}} \in \mathbb{R}^{B \times D_{\text{gmn}}}$**。系统首先计算两者的拓扑差值以捕获全局不匹配信号：
+**文本侧**：使用 DeBERTa tokenizer 将 `doc` 与 `claim` 拼接为 NLI 标准句对格式，最大序列长度由配置指定（如 1024）。
+
+**图侧**：由 LLM 预先从 `doc` / `claim` 抽取三元组知识图谱；图中每个节点/边的文本经 SentenceTransformer（如 Qwen3-Embedding-0.6B）编码为 **$D_{\text{emb}}$** 维向量（默认 1024），作为 GMN 的初始节点与边特征。训练时可加载 `data_preparation/precompute_embeddings.py` 预计算的嵌入缓存以加速。
+
+GMN 编码器对 **$G_{\text{claim}}$** 与 **$G_{\text{doc}}$** 执行多层跨图消息传递（默认 3 层），输出：
+
+- 节点级隐状态：**$H_{\text{claim}}, H_{\text{doc}} \in \mathbb{R}^{N \times D_{\text{gmn}}}$**（合并为 **$H_{\text{nodes}}$**）
+- 经全局均值池化后的图级向量：**$h_{\text{claim}}, h_{\text{doc}} \in \mathbb{R}^{B \times D_{\text{gmn}}}$**
+
+### 1. 通路一：基于图级差异向量的全局残差注入（Macro-Level）
+
+图级注入旨在从宏观维度让 NLI 编码器感知断言图与文档图之间的整体结构偏离。
+
+计算两图全局向量的差值以捕获拓扑不匹配信号：
 
 $$
 \Delta h_G = h_{\text{claim}} - h_{\text{doc}}
 $$
 
-随后，通过一个可学习的线性映射层 **$W_{\text{graph}} \in \mathbb{R}^{D_{\text{gmn}} \times H_{\text{heads}}}$** 将该差值向量投影至LLM的多头注意力特征空间，生成全局图级偏置项：
+通过可学习线性映射 **$W_{\text{graph}} \in \mathbb{R}^{D_{\text{gmn}} \times D_{\text{nli}}}$** 将差值投影至 DeBERTa 隐层维度，并以广播方式融入当前层隐状态 **$H_k \in \mathbb{R}^{B \times L \times D_{\text{nli}}}$**：
 
 $$
-b_{\text{graph}} = \Delta h_G \cdot W_{\text{graph}}
+H_{\text{macro}} = \text{LayerNorm}\!\left( H_k + \tanh(\alpha_{\text{macro}}) \cdot \text{Unsqueeze}\!\left( \Delta h_G \cdot W_{\text{graph}} \right) \right)
 $$
 
-在LLM自注意力机制（Self-Attention）计算各Token间的关联得分矩阵 **$A = \frac{Q K^T}{\sqrt{d}} \in \mathbb{R}^{B \times H_{\text{heads}} \times L \times L}$** 时，将 **$b_{\text{graph}}$** 动态广播并作为背景偏置（Attention Bias）直接融入公式中：
+其中 **$\alpha_{\text{macro}}$** 为可学习门控标量，显式初始化为 0。训练初期图级信号不干扰 NLI 编码器原有的语言表征，随优化逐步放大，使模型感知全局事实冲突。
+
+### 2. 通路二：基于节点级矩阵的门控交叉注意力注入（Micro-Level）
+
+节点级注入旨在从微观维度让 NLI 编码器在 token 级别检索结构化实体，实现细粒度事实对齐。
+
+将 GMN 输出的 claim 与 doc 全部节点隐状态横向拼接，构建变长节点矩阵 **$H_{\text{nodes}} \in \mathbb{R}^{N \times D_{\text{gmn}}}$**。以 DeBERTa 第 **$k$** 层 Self-Attention 输出 **$H_k$** 为 Query，经投影后的节点特征为 Key / Value，执行多头缩放点积交叉注意力：
 
 $$
-A_{\text{new}} = \text{Softmax}\left( \frac{Q K^T}{\sqrt{d}} + \gamma \cdot \text{Unsqueeze}(b_{\text{graph}}) \right)
+K_g = H_{\text{nodes}} \cdot W_K, \quad V_g = H_{\text{nodes}} \cdot W_V, \quad Q_l = H_k \cdot W_Q
 $$
 
-其中 **$\gamma$** 为可学习的缩放标量。当两图结构冲突剧烈时，该偏置项将压制LLM自注意力层盲目的序列置信度，促使模型将计算权重向跨模态知识检索通路倾斜。
-
-### 2. 通路二：基于节点级矩阵的“门控交叉注意力”注入（Micro-Level）
-
-节点级注入旨在从微观维度让大模型在生成具体的实体、概念或逻辑关系时，实现字词级别的“事实查表与对齐”。
-
-系统将GMN在传播层结束时保留的断言图与文档图的所有节点隐状态横向拼接，构建包含动态数量 **$N$** 个节点的局部知识矩阵 **$H_{\text{nodes}} \in \mathbb{R}^{B \times N \times D_{\text{gmn}}}$**。在LLM原有的Self-Attention模块之后、FFN（前馈网络）模块之前，强行嵌入一个全新的 **门控交叉注意力层（Gated Cross-Attention Layer）** 。
-
-首先，利用全新初始化的线性层将变长的节点特征投影为LLM的键（Key）和值（Value）矩阵：
-
 $$
-K_g = H_{\text{nodes}} \cdot W_K, \quad V_g = H_{\text{nodes}} \cdot W_V
+\text{Context} = \text{Softmax}\!\left( \frac{Q_l \cdot K_g^T}{\sqrt{D_{\text{nli}}}} \right) \cdot V_g
 $$
 
-此时，以经历完自注意力校准的LLM隐藏状态 **$H_{\text{llm}} \in \mathbb{R}^{B \times L \times D_{\text{llm}}}$** 作为查询矩阵（Query）：
+对 batch 内每个样本仅使用其自身节点作为 Key/Value（跨样本隔离），并对变长节点数做 padding mask。注入结果经零初始化门控残差融合：
 
 $$
-Q_l = H_{\text{llm}} \cdot W_Q
+H_{\text{micro}} = \text{LayerNorm}\!\left( H_k + \tanh(\alpha_{\text{micro}}) \cdot \text{Context} \right)
 $$
 
-通过缩放点积跨注意力算子计算文本Token对结构化实体的检索关联，并在其矩阵乘法中天然消解了动态节点数 **$N$** 的异构限制，输出符合LLM维度的上下文矩阵 **$\text{Context} \in \mathbb{R}^{B \times L \times D_{\text{llm}}}$**：
+门控标量 **$\alpha_{\text{micro}}$** 同样初始化为 0，保障训练稳定性。微观通路与宏观通路在同一 hook 内顺序执行：先 Cross-Attention 节点注入，再叠加图级差异向量。
+
+注入完成后，DeBERTa 第 **$k+1$** 至最终层继续前向传播；取 **[CLS]** 向量经 Dropout 与线性分类头输出 logits：
 
 $$
-\text{Context} = \text{Softmax}\left( \frac{Q_l \cdot K_g^T}{\sqrt{D_{\text{llm}}}} \right) \cdot V_g
+\hat{y} = W_{\text{cls}} \cdot \text{Dropout}(H_{\text{final}}[\text{CLS}])
 $$
 
-为了确保模型训练初期的稳定性，防止新特征破坏LLM原有的语言表征，本架构引入零初始化的门控隐式机制（Tanh Gating）进行残差融合：
-
-$$
-H_{\text{out}} = H_{\text{llm}} + \tanh(\alpha) \cdot \text{Context}
-$$
-
-其中门控标量 **$\alpha$** 显式初始化为0。随着微调训练的推进，**$\alpha$** 会自适应放大，使得LLM在思维链（CoT）生成具体的断言实体时，能精准通过Cross-Attention捕获事实冲突并实时扭转Token的概率分布，从而在根源上阻断幻觉的滋生。
+标签约定：**1 = support（支持 / entailment）**，**0 = hallucination（幻觉 / 不支持）**。若加载的 `nli_model_path` 为已在 NLI 任务上微调过的分类 checkpoint，则复用其 `id2label` 语义与分类头权重；若为纯预训练 backbone（如裸 `deberta-v3-large`），分类头随机初始化。
 
 ### 3. 训练与微调策略
 
-本架构在训练时采用高效的参数解耦微调方案（Parameter-Efficient Fine-Tuning）。大语言模型（LLM）的1至15层参数完全冻结（Freeze），以完整保留其深厚的通用语言理解功底。从第16层至最终的输出层，对LLM原有的自注意力投影矩阵与FFN全连接矩阵挂载 **LoRA（低秩适应）旁路** 。训练时，GMN匹配网络、新插入的Gated Cross-Attention层以及LLM后16层的LoRA参数进行端到端的联合训练。利用包含思维链分析的核查数据集，模型通过预测最终的事实分析轨迹与判别标签计算交叉熵损失（Cross-Entropy Loss），倒推梯度协同更新，最终使整个系统具备“深思熟虑、据实纠偏”的强健幻觉判别能力。
+本架构采用 **分层冻结 + 差异化学习率** 的高效微调方案，而非 LoRA：
+
+| 组件 | 策略 |
+|------|------|
+| DeBERTa 前 **$N$** 层（如 `freeze_nli_layers=12`） | 完全冻结，保留通用语言理解能力 |
+| DeBERTa 后 **$L-N$** 层 | 参与训练，学习率 = `learning_rate × deberta_lr_ratio`（通常更低） |
+| GMN、Cross-Attention 注入层、图级投影、分类头 | 端到端联合训练，学习率 = `learning_rate` |
+
+**损失函数**：带类别权重的交叉熵（`CrossEntropyLoss`），可选 label smoothing（如 0.05），在 NLI 标签空间计算以与 `id2label` 映射一致。
+
+**优化器**：AdamW + Linear Warmup → Cosine Decay 学习率调度。
+
+**训练监控**：以验证集 **F1** 为早停指标（`patience` 连续若干 epoch 无提升则停止），保存最优检查点至 `models/graph_match/best_f1.pt`。
+
+**数据**：默认在 minicheck 的 `train / val / test` 划分上训练（`configs/graph_match_nli.yaml`），图数据来自 `data_with_graph/<generator>/` 目录。
+
+**多卡**：配置 `training.tensor_parallel_size > 1` 时自动拉起 DDP 多进程训练；亦兼容 `torchrun` 启动。
+
+### 4. 推理与评估
+
+训练完成后，使用 `graph_match_nli/evaluate.py` 加载检查点，对各 benchmark 批量推理，将 `pred_label` / `pred_prob` 写入各数据集的 `our_results/` 目录。最终指标由 `evaluation/evaluate.py` 统一计算，主指标为 **BAcc**（平衡准确率）。
+
+**启动命令示例**：
+
+```bash
+# 训练
+python graph_match_nli/train.py --config configs/graph_match_nli.yaml
+
+# 推理
+python graph_match_nli/evaluate.py --ckpt models/graph_match/best_f1.pt
+
+# 评估
+python evaluation/evaluate.py --config configs/evaluation.yaml
+```

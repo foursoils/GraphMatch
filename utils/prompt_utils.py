@@ -56,25 +56,6 @@ class PromptManager(BasePromptManager):
             {"role": "user", "content": user_prompt}
         ]
 
-class CoTPromptManager(BasePromptManager):
-    """
-    Prompt manager for Chain-of-Thought dataset generation (cot_generation).
-    Replaces {{doc}}, {{claim}}, {{label}}, and {{label_desc}}.
-    """
-    def get_messages(self, doc: str, claim: str, label: int) -> list:
-        label_desc = "Supported" if int(label) == 1 else "Unsupported"
-        user_prompt = (
-            self.user_prompt_template
-            .replace("{{doc}}", str(doc))
-            .replace("{{claim}}", str(claim))
-            .replace("{{label}}", str(label))
-            .replace("{{label_desc}}", label_desc)
-        )
-        return [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": user_prompt}
-        ]
-
 class HalluPromptManager(BasePromptManager):
     """
     Prompt manager for standard hallucination detection (contrast_experiment).

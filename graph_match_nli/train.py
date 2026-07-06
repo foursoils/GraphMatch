@@ -15,7 +15,6 @@ NLI-Graph 融合模型训练脚本
 import os
 import sys
 import argparse
-import yaml
 os.environ.setdefault('PYTORCH_MPS_HIGH_WATERMARK_RATIO', '0.0')  # MPS 不限制上限，避免 OOM
 import random
 from datetime import datetime
@@ -40,11 +39,11 @@ from nli_labels import (
     nli_logits_to_support_probs,
 )
 from utils.path_utils import configure_dist_process_logging, log_rank0
+from utils.io_utils import load_yaml_config
 
 
 def load_config(path: str) -> dict:
-    with open(path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)['nli_graph']
+    return load_yaml_config(path)['nli_graph']
 
 
 def set_seed(seed: int):

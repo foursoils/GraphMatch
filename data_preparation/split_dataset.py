@@ -4,14 +4,12 @@
 输出: train.parquet, val.parquet, test.parquet
 """
 import os
-import yaml
+import sys
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-
-def load_config(path):
-    with open(path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from utils.io_utils import load_yaml_config as load_config
 
 
 def main():

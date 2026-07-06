@@ -1,6 +1,5 @@
 import os
 import sys
-import yaml
 import json
 import argparse
 import pandas as pd
@@ -12,22 +11,16 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from utils.path_utils import resolve_path
 from utils.prompt_utils import PromptManager
 from utils.model_engine import LocalQwenExtractor
+from utils.io_utils import load_yaml_config, save_parquet_append
 
-def load_config(config_path: str) -> dict:
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+load_config = load_yaml_config
+
+GRAPH_BUFFER_COLUMNS = ['id', 'claim', 'graph_claim', 'claim_graph_status', 'doc', 'graph_doc', 'doc_graph_status', 'label']
+
 
 def save_buffer(buffer: list, output_path: str):
     """保存并追加缓冲区数据到 parquet 文件。"""
-    new_df = pd.DataFrame(buffer)
-    desired_cols = ['id', 'claim', 'graph_claim', 'claim_graph_status', 'doc', 'graph_doc', 'doc_graph_status', 'label']
-    new_df = new_df[[col for col in desired_cols if col in new_df.columns]]
-    if os.path.exists(output_path):
-        existing_df = pd.read_parquet(output_path)
-        combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-        combined_df.to_parquet(output_path, index=False)
-    else:
-        new_df.to_parquet(output_path, index=False)
+    save_parquet_append(buffer, output_path, columns=GRAPH_BUFFER_COLUMNS)
 
 def process_dataset(
     dataset_name: str,

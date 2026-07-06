@@ -38,7 +38,7 @@ nli_graph:
     inject_layer_k: 12
 
     # Cross-Attention 头数（需整除 hidden_size=1024）
-    num_heads: 16
+    num_heads: 8
 
     # 冻结前 16 层 DeBERTa：只训后 8 层 + 分类头
     freeze_nli_layers: 12
@@ -47,8 +47,8 @@ nli_graph:
     dropout: 0.3
 
   training:
-    batch_size: 2
-    accum_steps: 8
+    batch_size: 1
+    accum_steps: 16
     tensor_parallel_size: 1 # 新增: 内置多卡进程数量（1表示单卡，>1表示自动多卡DDP，需要至少同等数量GPU）
     learning_rate: 0.000005 # 1e-5（large 模型略低于 base）
     deberta_lr_ratio: 2 # DeBERTa LR = 4e-6

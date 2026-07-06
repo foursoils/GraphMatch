@@ -14,11 +14,11 @@ GraphCheck 消融实验 - 训练程序
 """
 
 import os
+import sys
 import gc
 import json
 import argparse
 
-import yaml
 import torch
 import pandas as pd
 from tqdm import tqdm
@@ -27,6 +27,11 @@ from torch.utils.data import DataLoader
 
 from model.graphcheck import GraphCheck
 
+# Add project root to sys.path so we can reuse the shared utilities
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+from utils.path_utils import resolve_path as _resolve_path_from_root
+from utils.io_utils import load_yaml_config
+
 
 # ---------------------------------------------------------------------------
 # 工具函数
@@ -34,16 +39,12 @@ from model.graphcheck import GraphCheck
 
 def load_config(config_path: str) -> dict:
     """加载 YAML 文件，返回 ablation.check 节点。"""
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)['ablation']['check']
+    return load_yaml_config(config_path)['ablation']['check']
 
 
 def resolve_path(base_dir: str, rel_or_abs: str) -> str:
-    """将含 '../' 的相对路径解析为绝对路径。"""
-    if os.path.isabs(rel_or_abs):
-        return rel_or_abs
-    cleaned = rel_or_abs.lstrip('.').lstrip('/').lstrip('\\')
-    return os.path.normpath(os.path.join(base_dir, cleaned))
+    """将相对路径解析为绝对路径（base_dir 已固定为项目根目录，故直接复用共享实现）。"""
+    return _resolve_path_from_root(rel_or_abs)
 
 
 def seed_everything(seed: int):

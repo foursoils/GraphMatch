@@ -10,90 +10,28 @@ GraphCheck 消融实验 - 集中式图节点/边文本嵌入预计算脚本
 """
 
 import os
+import sys
 import gc
-import json
-import yaml
 import torch
 import pandas as pd
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
+# Add project root to sys.path so we can reuse the shared utilities
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from utils.path_utils import resolve_path as _resolve_path_from_root
+from utils.io_utils import load_yaml_config
+from utils.dataset_utils import textualize_graph, get_text_embedding_online as get_text_embeddings_batch
+
 
 def load_config(config_path: str) -> dict:
     """加载 YAML 配置文件"""
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)
+    return load_yaml_config(config_path)
 
 
 def resolve_path(base_dir: str, rel_or_abs: str) -> str:
-    """解析路径，确保相对路径基准为项目根目录"""
-    if os.path.isabs(rel_or_abs):
-        return rel_or_abs
-    cleaned = rel_or_abs.lstrip('.').lstrip('/').lstrip('\\')
-    return os.path.normpath(os.path.join(base_dir, cleaned))
-
-
-def textualize_graph(graph_str: str):
-    """
-    将 JSON 格式的图字符串解析为节点和边。
-    返回: nodes_df (含 node_id, node_attr), edges_df (含 src, edge_attr, dst)
-    与 dataset.py 的 textualize_graph 逻辑完全一致。
-    """
-    if not graph_str or not isinstance(graph_str, str):
-        return pd.DataFrame(columns=['node_attr', 'node_id']), pd.DataFrame(columns=['src', 'edge_attr', 'dst'])
-    
-    try:
-        triples = json.loads(graph_str)
-    except Exception:
-        triples = []
-
-    if not triples:
-        return pd.DataFrame(columns=['node_attr', 'node_id']), pd.DataFrame(columns=['src', 'edge_attr', 'dst'])
-
-    nodes_dict = {}
-    edges_list = []
-
-    for tri in triples:
-        if len(tri) != 3: continue
-        src, edge_attr, dst = tri
-
-        src = src.lower().strip() if src else " "
-        edge_attr = edge_attr.lower().strip() if edge_attr else " "
-        dst = dst.lower().strip() if dst else " "
-
-        if src not in nodes_dict:
-            nodes_dict[src] = len(nodes_dict)
-        if dst not in nodes_dict:
-            nodes_dict[dst] = len(nodes_dict)
-
-        edges_list.append({
-            'src': nodes_dict[src],
-            'edge_attr': edge_attr,
-            'dst': nodes_dict[dst]
-        })
-
-    nodes_df = pd.DataFrame(nodes_dict.items(), columns=['node_attr', 'node_id'])
-    edges_df = pd.DataFrame(edges_list)
-    return nodes_df, edges_df
-
-
-@torch.no_grad()
-def get_text_embeddings_batch(texts: list, tokenizer, embed_model, device: str) -> torch.Tensor:
-    """
-    大批次计算文本列表的 Embedding（与 dataset.py 逻辑完全一致）。
-    """
-    if not texts:
-        return torch.zeros((0, embed_model.config.hidden_size))
-    
-    inputs = tokenizer(texts, padding=True, truncation=True, max_length=512, return_tensors="pt")
-    inputs = {k: v.to(device) for k, v in inputs.items()}
-    
-    outputs = embed_model(**inputs)
-    attention_mask = inputs['attention_mask']
-    last_hidden = outputs.last_hidden_state
-    input_mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden.size()).float()
-    embeddings = torch.sum(last_hidden * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-    return embeddings.cpu()
+    """解析路径（base_dir 已固定为项目根目录，故直接复用共享实现）。"""
+    return _resolve_path_from_root(rel_or_abs)
 
 
 def process_and_save(

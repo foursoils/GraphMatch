@@ -18,7 +18,6 @@ import os
 import sys
 import argparse
 
-import yaml
 import pandas as pd
 from tqdm import tqdm
 
@@ -28,6 +27,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..',
 from utils.path_utils import resolve_path
 from utils.prompt_utils import AblationPromptManager
 from utils.model_engine import VLLMEngine, parse_binary_label
+from utils.io_utils import load_yaml_config, save_parquet_append
 
 
 PRED_COL   = "pred_label"    # 预测结果列名
@@ -40,22 +40,10 @@ GRAPH_SUBDIR = "data_with_graph"      # 子目录名
 # ---------------------------------------------------------------------------
 
 def load_config(config_path: str) -> dict:
-    with open(config_path, 'r', encoding='utf-8') as f:
-        return yaml.safe_load(f)['ablation']['kg']
+    return load_yaml_config(config_path)['ablation']['kg']
 
 
-# Removed local resolve_path to use utils.path_utils.resolve_path
-
-
-def save_results(records: list, output_path: str):
-    """将缓冲区中的记录追加到输出 parquet 文件。"""
-    new_df = pd.DataFrame(records)
-    if os.path.exists(output_path):
-        existing_df = pd.read_parquet(output_path)
-        combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-        combined_df.to_parquet(output_path, index=False)
-    else:
-        new_df.to_parquet(output_path, index=False)
+save_results = save_parquet_append
 
 
 # ---------------------------------------------------------------------------
