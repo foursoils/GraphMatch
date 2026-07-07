@@ -1,10 +1,49 @@
 import os
+import re
 import json
 import torch
 import pandas as pd
 from torch_geometric.data import Data
 
 from utils.path_utils import log_rank0
+
+# ---------------------------------------------------------------------------
+# 长文档分块（对齐 MiniCheck 的 chunk + max 聚合策略）
+# ---------------------------------------------------------------------------
+_SENT_SPLIT_RE = re.compile(r'(?<=[.!?。！？])\s+')
+
+
+def split_into_sentences(text: str) -> list:
+    """轻量句子切分（无需额外依赖 nltk）。"""
+    text = (text or '').strip()
+    if not text:
+        return []
+    parts = _SENT_SPLIT_RE.split(text)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def split_doc_into_chunks(doc_text: str, tokenizer, chunk_size: int = 400) -> list:
+    """按句子边界将长文档切分为若干 chunk，每个 chunk 的 token 数不超过 chunk_size。
+
+    与 MiniCheck 的做法一致：按句子累积，一旦加入下一句会超过 chunk_size，
+    就切出一个新 chunk。用于推理时的"分块打分 + max 聚合"。
+    """
+    sentences = split_into_sentences(doc_text)
+    if not sentences:
+        return [doc_text] if doc_text else ['']
+
+    chunks, current_sents, current_len = [], [], 0
+    for sent in sentences:
+        sent_len = len(tokenizer(sent, add_special_tokens=False)['input_ids'])
+        if current_sents and current_len + sent_len > chunk_size:
+            chunks.append(' '.join(current_sents))
+            current_sents, current_len = [sent], sent_len
+        else:
+            current_sents.append(sent)
+            current_len += sent_len
+    if current_sents:
+        chunks.append(' '.join(current_sents))
+    return chunks if chunks else ([doc_text] if doc_text else [''])
 
 # ---------------------------------------------------------------------------
 # PairData：GMN 需要的 claim/doc 配对图格式，统一支持 NLI 模型的 token keys 批处理

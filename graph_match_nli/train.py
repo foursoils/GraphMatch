@@ -168,7 +168,8 @@ def run_training(local_rank: int, world_size: int, config: dict, base_dir: str):
         device=str(device),
         embed_cache_path=resolve(config['data']['val_embed_file']) if config['data'].get('val_embed_file') else None,
     )
-    batch_size = config['training']['batch_size']
+    batch_size     = config['training']['batch_size']
+    val_batch_size = config['training'].get('val_batch_size', batch_size)
 
     if is_dist:
         train_sampler = DistributedSampler(train_ds, shuffle=True, drop_last=True)
@@ -184,9 +185,10 @@ def run_training(local_rank: int, world_size: int, config: dict, base_dir: str):
         )
     # 验证集不做分布式切分，只在主进程上完整评估，避免多进程重复计算 / 写文件冲突
     val_loader = DataLoader(
-        val_ds, batch_size=batch_size, shuffle=False,
+        val_ds, batch_size=val_batch_size, shuffle=False,
         follow_batch=['x_s', 'x_t']
     )
+    log(f"  batch_size={batch_size} (train) | val_batch_size={val_batch_size}")
 
     # ── 模型 ──────────────────────────────────────────────────────────────
     log("[4/5] 初始化 NLI-Graph 融合模型...")

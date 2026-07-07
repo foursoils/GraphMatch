@@ -9,7 +9,7 @@ _PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJ_ROOT not in sys.path:
     sys.path.insert(0, _PROJ_ROOT)
 
-from utils.dataset_utils import build_pair_data, load_precomputed_embeddings
+from utils.dataset_utils import build_pair_data, load_precomputed_embeddings, split_doc_into_chunks
 from utils.path_utils import is_rank0, log_rank0
 
 class NLIGraphDataset(Dataset):
@@ -111,15 +111,8 @@ class NLIGraphDataset(Dataset):
     def __len__(self):
         return len(self.df)
 
-    def _get_raw_item(self, idx):
-        row = self.df.iloc[idx]
-        sample_id = row['id']
-        label = int(row['label'])
-
-        # ── DeBERTa 文本输入 ─────────────────────────────────────────────
-        doc_text   = str(row.get('doc',   ''))
-        claim_text = str(row.get('claim', ''))
-
+    def _tokenize(self, doc_text: str, claim_text: str):
+        """对 (doc_text, claim_text) 做 DeBERTa 编码，返回定长的 input_ids / attention_mask / token_type_ids。"""
         encoding = self.tokenizer(
             doc_text,
             claim_text,
@@ -134,9 +127,13 @@ class NLIGraphDataset(Dataset):
             token_type_ids = encoding['token_type_ids'].squeeze(0)
         else:
             token_type_ids = torch.zeros_like(input_ids)
+        return input_ids, attention_mask, token_type_ids
 
-        # ── 图对 ────────────────────────────────────────────────────────
-        pair = build_pair_data(
+    def _build_graph_pair(self, idx):
+        """构建样本 idx 的 claim/doc 图对（PairData），不含 token 输入。"""
+        row = self.df.iloc[idx]
+        sample_id = row['id']
+        return build_pair_data(
             claim_graph_str=str(row.get('graph_claim', '')),
             doc_graph_str=str(row.get(self.doc_col, '')),
             sample_id=sample_id,
@@ -145,14 +142,54 @@ class NLIGraphDataset(Dataset):
             text_emb_cache=getattr(self, 'text_emb_cache', None),
             device=self.device
         )
-        
+
+    def _get_raw_item(self, idx):
+        row = self.df.iloc[idx]
+        label = int(row['label'])
+
+        # ── DeBERTa 文本输入（整篇 doc，超长部分按 max_length 截断）──────
+        doc_text   = str(row.get('doc',   ''))
+        claim_text = str(row.get('claim', ''))
+        input_ids, attention_mask, token_type_ids = self._tokenize(doc_text, claim_text)
+
+        # ── 图对 ────────────────────────────────────────────────────────
+        pair = self._build_graph_pair(idx)
+
         # 统一使用公共的 PairData 并打包 NLI 附加特征
         pair.y = torch.tensor([label], dtype=torch.float32)
         pair.input_ids = input_ids
         pair.attention_mask = attention_mask
         pair.token_type_ids = token_type_ids
-        
+
         return pair
+
+    def get_chunk_samples(self, idx, chunk_size: int = 400):
+        """将样本 idx 的 doc 按句子切分为多个 chunk，每个 chunk 与 claim 拼接成独立输入，
+        共享同一张 claim/doc 三元组图（图不做切分）。
+
+        用于长文档推理时的"分块打分 + max 聚合"（对齐 MiniCheck 的做法），
+        不改变训练流程，仅在 evaluate.py 中按需调用。
+
+        返回: (List[PairData], label:int)
+        """
+        row = self.df.iloc[idx]
+        label = int(row['label'])
+        doc_text   = str(row.get('doc',   ''))
+        claim_text = str(row.get('claim', ''))
+
+        chunks = split_doc_into_chunks(doc_text, self.tokenizer, chunk_size=chunk_size)
+        graph_pair = self._build_graph_pair(idx)
+
+        samples = []
+        for chunk_text in chunks:
+            input_ids, attention_mask, token_type_ids = self._tokenize(chunk_text, claim_text)
+            pair = graph_pair.clone()
+            pair.input_ids = input_ids
+            pair.attention_mask = attention_mask
+            pair.token_type_ids = token_type_ids
+            samples.append(pair)
+
+        return samples, label
 
     def __getitem__(self, idx):
         if self.preload_to_memory:

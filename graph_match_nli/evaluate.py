@@ -18,7 +18,9 @@ import sys
 import argparse
 import pandas as pd
 import torch
+from tqdm import tqdm
 from torch_geometric.loader import DataLoader
+from torch_geometric.data import Batch
 from transformers import AutoTokenizer
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 
@@ -40,6 +42,37 @@ def parse_args():
     p.add_argument('--dataset', default=None,
                    help="指定仅对某个数据集进行推理（如 minicheck）")
     return p.parse_args()
+
+
+def run_chunked_inference(model, test_ds, device, label_spec, chunk_size: int, chunk_batch_size: int = 8):
+    """长文档分块推理：doc 按句切成多个 chunk，每个 chunk 与 claim 独立跑一次模型，
+    取所有 chunk 中的最大支持概率作为该样本的最终预测（对齐 MiniCheck 的 chunk + max 策略）。
+    图（claim/doc 三元组图）不切分，所有 chunk 共享同一张图。
+    """
+    model.eval()
+    all_preds, all_probs, all_labels = [], [], []
+
+    with torch.no_grad():
+        for idx in tqdm(range(len(test_ds)), desc="  推理(分块)", leave=False):
+            pairs, label = test_ds.get_chunk_samples(idx, chunk_size=chunk_size)
+
+            chunk_probs = []
+            for i in range(0, len(pairs), chunk_batch_size):
+                batch = Batch.from_data_list(
+                    pairs[i:i + chunk_batch_size], follow_batch=['x_s', 'x_t']
+                ).to(device)
+                logits = model(batch.input_ids, batch.attention_mask, batch.token_type_ids, batch)
+                probs = nli_logits_to_support_probs(logits, label_spec)
+                chunk_probs.extend(probs.cpu().tolist())
+
+            final_prob = max(chunk_probs) if chunk_probs else 0.0
+            final_pred = 1 if final_prob > 0.5 else 0
+
+            all_preds.append(final_pred)
+            all_probs.append(final_prob)
+            all_labels.append(label)
+
+    return all_preds, all_probs, all_labels
 
 
 def evaluate():
@@ -110,6 +143,21 @@ def evaluate():
         datasets = [args.dataset]
 
     print(f"开始批量推理，共 {len(datasets)} 个数据集...")
+    test_batch_size = config['training'].get(
+        'test_batch_size',
+        config['training'].get('val_batch_size', config['training']['batch_size']),
+    )
+    print(f"  test_batch_size={test_batch_size}")
+
+    # 长文档分块推理配置（不影响训练，仅在此处生效）：
+    #   chunked=True 时，doc 按句切成多个 ~chunk_size token 的块，
+    #   每块独立打分后取最大支持概率（对齐 MiniCheck 的 chunk + max 聚合策略）
+    infer_cfg  = config.get('inference', {})
+    chunked           = infer_cfg.get('chunked', False)
+    chunk_size        = infer_cfg.get('chunk_size', 400)
+    chunk_batch_size  = infer_cfg.get('chunk_batch_size', 8)
+    if chunked:
+        print(f"  [分块推理] 已启用: chunk_size={chunk_size}, chunk_batch_size={chunk_batch_size}")
 
     for dataset_name in datasets:
         print(f"\n{'='*60}")
@@ -129,38 +177,45 @@ def evaluate():
         print(f"  输入路径: {test_path}")
         print(f"  输出路径: {output_path}")
 
-        # 构建测试集
+        # 构建测试集（分块模式下不需要预先缓存整篇 doc 的编码，节省内存与时间）
         test_ds = NLIGraphDataset(
             test_path, tokenizer, emb_model_path,
             max_length=config['model']['max_length'],
             device=str(device),
             embed_cache_path=None,  # 自动寻址
-        )
-        test_loader = DataLoader(
-            test_ds, batch_size=config['training']['batch_size'],
-            shuffle=False, follow_batch=['x_s', 'x_t']
+            preload_to_memory=not chunked,
         )
 
-        all_preds, all_probs, all_labels = [], [], []
+        if chunked:
+            all_preds, all_probs, all_labels = run_chunked_inference(
+                model, test_ds, device, label_spec,
+                chunk_size=chunk_size, chunk_batch_size=chunk_batch_size,
+            )
+        else:
+            test_loader = DataLoader(
+                test_ds, batch_size=test_batch_size,
+                shuffle=False, follow_batch=['x_s', 'x_t']
+            )
 
-        with torch.no_grad():
-            from tqdm import tqdm
-            for batch in tqdm(test_loader, desc=f"  推理 {dataset_name}", leave=False):
-                batch = batch.to(device)
-                logits = model(
-                    batch.input_ids,
-                    batch.attention_mask,
-                    batch.token_type_ids,
-                    batch
-                )
-                # 数据集 label 1=支持, 0=幻觉；由 label_spec 统一解码 NLI logits
-                probs = nli_logits_to_support_probs(logits, label_spec)
-                preds = nli_logits_to_support_preds(logits, label_spec)
-                labels = batch.y.view(-1).long()
+            all_preds, all_probs, all_labels = [], [], []
 
-                all_preds.extend(preds.cpu().numpy().tolist())
-                all_probs.extend(probs.cpu().numpy().tolist())
-                all_labels.extend(labels.cpu().numpy().tolist())
+            with torch.no_grad():
+                for batch in tqdm(test_loader, desc=f"  推理 {dataset_name}", leave=False):
+                    batch = batch.to(device)
+                    logits = model(
+                        batch.input_ids,
+                        batch.attention_mask,
+                        batch.token_type_ids,
+                        batch
+                    )
+                    # 数据集 label 1=支持, 0=幻觉；由 label_spec 统一解码 NLI logits
+                    probs = nli_logits_to_support_probs(logits, label_spec)
+                    preds = nli_logits_to_support_preds(logits, label_spec)
+                    labels = batch.y.view(-1).long()
+
+                    all_preds.extend(preds.cpu().numpy().tolist())
+                    all_probs.extend(probs.cpu().numpy().tolist())
+                    all_labels.extend(labels.cpu().numpy().tolist())
 
         # 写出预测结果
         out_df = test_ds.df.copy()

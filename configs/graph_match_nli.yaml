@@ -27,7 +27,7 @@ nli_graph:
     num_labels: 2
 
     # DeBERTa 输入长度：deberta-v3-large 的 max_position_embeddings=512，不能超过
-    max_length: 1024
+    max_length: 512
 
     # GMN 参数（v3：回归 v1 验证可行的 dim=256，避免 dim=512 训练不动 + 容量过剩）
     node_input_dim: 1024
@@ -46,9 +46,24 @@ nli_graph:
     # 强 dropout
     dropout: 0.3
 
+  # 推理专属配置：仅在 evaluate.py 中生效，不影响训练流程
+  inference:
+    # 是否启用长文档分块推理（对齐 MiniCheck 的 chunk + max 聚合策略）：
+    #   doc 按句切成多个 ~chunk_size token 的块，每块与 claim 独立打分，
+    #   取所有块中的最大支持概率作为该样本的最终预测。
+    #   claim/doc 三元组图不切分，所有 chunk 共享同一张图。
+    chunked: true
+    # 每个 chunk 的目标 token 数（不含 claim 部分），与 max_length 配合：
+    #   chunk_size + claim 长度 + 特殊 token 应 <= max_length
+    chunk_size: 400
+    # 同一样本内，多个 chunk 一次前向的批大小（显存允许可调大）
+    chunk_batch_size: 8
+
   training:
-    batch_size: 1
-    accum_steps: 16
+    batch_size: 4
+    val_batch_size: 16 # 训练时验证 batch，可与训练分开设置以加速评估
+    test_batch_size: 24 # 测试推理 batch（evaluate.py）
+    accum_steps: 4
     tensor_parallel_size: 1 # 新增: 内置多卡进程数量（1表示单卡，>1表示自动多卡DDP，需要至少同等数量GPU）
     learning_rate: 0.000005 # 1e-5（large 模型略低于 base）
     deberta_lr_ratio: 2 # DeBERTa LR = 4e-6
