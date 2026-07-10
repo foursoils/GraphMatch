@@ -8,23 +8,25 @@ nli_graph:
     datasets:
       - AggreFact-CNN
       - AggreFact-XSum
-      - COVID-Fact
       - ExpertQA
       - SCIFACT
+      - Reveal
+      - WiCE
+      - LFQA
+      - TofuEval-MediaSum
       - minicheck
-      - pubhealth
-      - summeval
 
   model:
-    # NLI 编码器：目前是裸的 microsoft/deberta-v3-large 预训练 backbone（无分类头、无 id2label）
-    # 分类头随机初始化，从零在下游数据上训练；标签约定固定为 1=support(entailment) / 0=hallucination
+    # NLI 编码器：MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli（3-class NLI）
+    # entailment / neutral / contradiction；训练时 1→entailment，0→contradiction
     nli_model_path: "../models/nlis/deberta-v3-large"
     # 节点 Embedding 模型
     embedding_model_path: "../models/embeddings/Qwen3-Embedding-0.6B"
     device: "cuda"
 
-    # 分类数（当前仅支持二分类）；若 nli_model_path 换成已微调的分类 checkpoint 会被其自身 id2label 覆盖
-    num_labels: 2
+    # 分类数：仅当 nli_model_path 为纯预训练 backbone 时生效；
+    # MoritzLaurer 等已微调 NLI checkpoint 会以其 config.id2label 为准（当前为 3-class）
+    num_labels: 3
 
     # DeBERTa 输入长度：deberta-v3-large 的 max_position_embeddings=512，不能超过
     max_length: 512

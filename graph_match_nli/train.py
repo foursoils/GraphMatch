@@ -128,6 +128,11 @@ def run_training(local_rank: int, world_size: int, config: dict, base_dir: str):
     train_path     = resolve(config['data']['train_parquet'])
     val_path       = resolve(config['data']['val_parquet'])
     nli_model_path = resolve(config['model']['nli_model_path'])
+    if not os.path.isdir(nli_model_path):
+        raise FileNotFoundError(
+            f"NLI 模型目录不存在: {nli_model_path}\n"
+            f"请检查 configs/graph_match_nli.yaml 中 model.nli_model_path"
+        )
     emb_model_path = resolve(config['model']['embedding_model_path'])
     best_f1_path   = resolve(config['training']['best_f1_path'])
     model_dir      = os.path.dirname(best_f1_path)

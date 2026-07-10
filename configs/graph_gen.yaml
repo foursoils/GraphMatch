@@ -5,17 +5,18 @@ minicheck:
     input_subdir: "processed_data"
     input_filename: "with_id.parquet"
     output_subdir: "data_with_graph"
-    output_filename: "gemma_26b_tk.parquet"
+    output_filename: "gemma_31b_tk.parquet"
     datasets:
       - AggreFact-CNN
       - AggreFact-XSum
-      - COVID-Fact
       - ExpertQA
-      - Reveal
       - SCIFACT
+      - Reveal
+      - WiCE
+      - LFQA
+      - TofuEval-MediaSum
       # - minicheck
-      - pubhealth
-      - summeval
+
   model:
     max_new_tokens: 4096
     temperature: 0.6
@@ -26,7 +27,7 @@ minicheck:
     repetition_penalty: 1.3
     enable_thinking: true
   inference:
-    engine_type: "api"   # api | vllm
+    engine_type: "vllm"   # api | vllm
     test_limit: 0
     save_every_n_items: 10
 
@@ -40,7 +41,7 @@ minicheck:
 
     # vLLM 专属参数
     vllm:
-      vllm_model_path: "../models/llms/gemma-4-26B-A4B-it"
+      vllm_model_path: "../models/llms/gemma-4-31B-it"
       vllm_gpu_memory_utilization: 0.9
       vllm_tensor_parallel_size: 1
       vllm_max_model_len: 40960

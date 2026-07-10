@@ -92,6 +92,11 @@ def evaluate():
     output_filename = config['data'].get('output_filename', 'qwen3.5_2b_tk.parquet')
 
     nli_model_path = resolve(config['model']['nli_model_path'])
+    if not os.path.isdir(nli_model_path):
+        raise FileNotFoundError(
+            f"NLI 模型目录不存在: {nli_model_path}\n"
+            f"请检查 configs/graph_match_nli.yaml 中 model.nli_model_path"
+        )
     emb_model_path = resolve(config['model']['embedding_model_path'])
     
     if args.ckpt:
