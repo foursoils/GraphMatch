@@ -1,0 +1,67 @@
+nli_graph:
+  data:
+    # v2：相对 stage2.yaml 把抽样比例从 20%/10% 提到 40%/15%（见 configs/stage2_augment_v2.yaml），
+    # 每个数据集贡献更多训练信号（尤其 AggreFact-CNN 111→222 条）；train 同样对幻觉类过采样到 1:1。
+    train_parquet: "../data/stage2_augment_v2/train_balanced.parquet"
+    val_parquet: "../data/stage2_augment_v2/val.parquet"
+    test_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/test.parquet"
+    data_root: "../data"
+    # 与 stage1(roberta-large-mnli.parquet) / stage2 v1(...-stage2.parquet) 区分
+    output_filename: "roberta-large-mnli-stage2-v2.parquet"
+    # 与 v1 held-out 文件（gemma_26b_tk_holdout.parquet）区分，指向 v2 版本的 held-out
+    holdout_tag: "v2"
+    # 阈值校准（见 data_preparation/tune_threshold.py，在验证集上选出，未混入 held-out 测试集）：
+    # AggreFact-CNN/Reveal 的模型输出偏向"支持"，调高阈值后 BAcc 有稳定提升；
+    # ExpertQA 验证集上未找到优于 0.5 的阈值，维持默认。
+    thresholds:
+      AggreFact-CNN: 0.75
+      Reveal: 0.71
+    datasets:
+      - AggreFact-CNN
+      - AggreFact-XSum
+      - ExpertQA
+      - SCIFACT
+      - Reveal
+      - WiCE
+      - LFQA
+      - TofuEval-MediaSum
+      - minicheck
+
+  model:
+    nli_model_path: "../models/nlis/roberta-large-mnli"
+    embedding_model_path: "../models/embeddings/Qwen3-Embedding-0.6B"
+    device: "cuda"
+    num_labels: 3
+    max_length: 512
+    node_input_dim: 1024
+    node_hidden_dim: 512
+    num_prop_layers: 3
+    inject_layer_k: 12
+    num_heads: 8
+    freeze_nli_layers: 12
+    dropout: 0.3
+
+  inference:
+    chunked: true
+    chunk_size: 400
+    chunk_batch_size: 8
+
+  training:
+    # 继续训练：从 stage1 完整重训（3 epoch，未中断）产出的 best_f1.pt 加载权重
+    init_ckpt: "../models/graph_match/roberta_large_mnli/best_f1.pt"
+
+    batch_size: 4
+    val_batch_size: 16
+    test_batch_size: 24
+    accum_steps: 4
+    tensor_parallel_size: 1
+
+    learning_rate: 0.00002
+    encoder_lr_ratio: 0.05
+    weight_decay: 0.05
+    label_smoothing: 0.05
+    warmup_ratio: 0.1
+    num_epochs: 3
+    patience: 3
+    best_f1_path: "../models/graph_match/roberta_large_mnli/best_f1_stage2_v2.pt"
+    seed: 42

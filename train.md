@@ -1,14 +1,15 @@
+```markdown
 以下是针对**基于图匹配网络（GMN）与 NLI 编码器双重注入的事实核查模型（NLI-Graph）**的完整架构与技术说明文段，可直接用于论文的架构设计（Methodology）章节或技术报告中：
 
 ## 基于 GMN 双重注入的 NLI 事实核查架构说明
 
-本方案提出了一种 **宏观-微观协同纠偏机制（Macro-Micro Collaborative Correction）** ，将图匹配网络（GMN）提取的结构化拓扑特征注入预训练的 NLI 编码器（DeBERTa-v3），用于判断声明（claim）是否被参考文档（doc）所支持。与将图信息注入自回归大语言模型（LLM）思维链的方案不同，本架构以 **自然语言推理（NLI）分类范式** 为骨干：输入为 `[CLS] doc [SEP] claim [SEP]` 的句对编码，输出为二分类 logits（支持 / 幻觉），更适合高效、可复现的事实核查判别任务。
+本方案提出了一种 **宏观-微观协同纠偏机制（Macro-Micro Collaborative Correction）** ，将图匹配网络（GMN）提取的结构化拓扑特征注入预训练的 NLI 编码器（DeBERTa-v3），用于判断声明（claim）是否被参考文档（doc）所支持。与将图信息注入自回归大语言模型（LLM）思维链的方案不同，本架构以 **自然语言推理（NLI）分类范式** 为骨干：输入为 `[CLS] doc [SEP] claim [SEP]` 的句对编码，输出为 **基于 NLI 的多类分类 logits**（如 entailment / neutral / contradiction）。事实核查监督信号映射到 NLI 标签空间：**支持 → entailment，幻觉 → contradiction**（neutral 类不参与监督），更适合高效、可复现的事实核查判别任务。
 
 整体采用双路异构特征融合设计：待检测的断言图（**$G_{\text{claim}}$**）与参考文档子图（**$G_{\text{doc}}$**）经 GMN 跨图传播后，在 DeBERTa 第 **$k$** 层（Self-Attention 之后、FFN 之前）分别从"图级全局拓扑差异"与"节点级细粒度实体对齐"两个维度完成双重注入。
 
 ### 0. 输入表示与 GMN 编码
 
-**文本侧**：使用 DeBERTa tokenizer 将 `doc` 与 `claim` 拼接为 NLI 标准句对格式，最大序列长度由配置指定（如 1024）。
+**文本侧**：使用 DeBERTa tokenizer 将 `doc` 与 `claim` 拼接为 NLI 标准句对格式。训练与验证时，序列长度上限取 backbone 的 `max_position_embeddings`（当前 DeBERTa-v3-large 为 **512**），超长文档在训练阶段直接截断。
 
 **图侧**：由 LLM 预先从 `doc` / `claim` 抽取三元组知识图谱；图中每个节点/边的文本经 SentenceTransformer（如 Qwen3-Embedding-0.6B）编码为 **$D_{\text{emb}}$** 维向量（默认 1024），作为 GMN 的初始节点与边特征。训练时可加载 `data_preparation/precompute_embeddings.py` 预计算的嵌入缓存以加速。
 
@@ -30,7 +31,7 @@ $$
 通过可学习线性映射 **$W_{\text{graph}} \in \mathbb{R}^{D_{\text{gmn}} \times D_{\text{nli}}}$** 将差值投影至 DeBERTa 隐层维度，并以广播方式融入当前层隐状态 **$H_k \in \mathbb{R}^{B \times L \times D_{\text{nli}}}$**：
 
 $$
-H_{\text{macro}} = \text{LayerNorm}\!\left( H_k + \tanh(\alpha_{\text{macro}}) \cdot \text{Unsqueeze}\!\left( \Delta h_G \cdot W_{\text{graph}} \right) \right)
+H_{\text{macro}} = \text{LayerNorm}\!\left( H_{\text{micro}} + \tanh(\alpha_{\text{macro}}) \cdot \text{Unsqueeze}\!\left( \Delta h_G \cdot W_{\text{graph}} \right) \right)
 $$
 
 其中 **$\alpha_{\text{macro}}$** 为可学习门控标量，显式初始化为 0。训练初期图级信号不干扰 NLI 编码器原有的语言表征，随优化逐步放大，使模型感知全局事实冲突。
@@ -63,7 +64,14 @@ $$
 \hat{y} = W_{\text{cls}} \cdot \text{Dropout}(H_{\text{final}}[\text{CLS}])
 $$
 
-标签约定：**1 = support（支持 / entailment）**，**0 = hallucination（幻觉 / 不支持）**。若加载的 `nli_model_path` 为已在 NLI 任务上微调过的分类 checkpoint，则复用其 `id2label` 语义与分类头权重；若为纯预训练 backbone（如裸 `deberta-v3-large`），分类头随机初始化。
+**标签映射**：数据集原始标签为 **1 = support（支持）**、**0 = hallucination（幻觉）**。训练时将监督信号映射至 NLI 类别空间：
+
+| 数据集标签 | NLI 类别 |
+|-----------|---------|
+| 1（支持） | entailment |
+| 0（幻觉） | contradiction |
+
+若加载的 `nli_model_path` 为已在 NLI 任务上微调过的分类 checkpoint（如 3-class MNLI 模型），则复用其 `id2label` 语义与分类头权重；若为纯预训练 backbone（如裸 `deberta-v3-large`），分类头随机初始化，采用与数据集一致的二值索引约定（1=support，0=hallucination）。推理时从 NLI logits 中取 entailment 类概率作为支持度，再与 0.5 阈值比较得到最终二值预测。
 
 ### 3. 训练与微调策略
 
@@ -72,7 +80,7 @@ $$
 | 组件 | 策略 |
 |------|------|
 | DeBERTa 前 **$N$** 层（如 `freeze_nli_layers=12`） | 完全冻结，保留通用语言理解能力 |
-| DeBERTa 后 **$L-N$** 层 | 参与训练，学习率 = `learning_rate × deberta_lr_ratio`（通常更低） |
+| DeBERTa 后 **$L-N$** 层 | 参与训练，学习率 = `learning_rate × deberta_lr_ratio`（**低于** GMN / 注入层，如 `deberta_lr_ratio=0.1`） |
 | GMN、Cross-Attention 注入层、图级投影、分类头 | 端到端联合训练，学习率 = `learning_rate` |
 
 **损失函数**：带类别权重的交叉熵（`CrossEntropyLoss`），可选 label smoothing（如 0.05），在 NLI 标签空间计算以与 `id2label` 映射一致。
@@ -87,7 +95,24 @@ $$
 
 ### 4. 推理与评估
 
-训练完成后，使用 `graph_match_nli/evaluate.py` 加载检查点，对各 benchmark 批量推理，将 `pred_label` / `pred_prob` 写入各数据集的 `our_results/` 目录。最终指标由 `evaluation/evaluate.py` 统一计算，主指标为 **BAcc**（平衡准确率）。
+#### 4.1 长文档分块推理
+
+训练阶段受 backbone 最大长度限制（DeBERTa-v3-large 为 512），对超长 doc 直接截断。推理阶段启用 **分块（chunked）策略** 以覆盖完整文档：
+
+1. **按模型最大长度切分**：将 doc 按句子边界切分为若干 chunk，使每个 chunk 与 claim 拼接后（含 `[CLS]` / `[SEP]` 等特殊 token）不超过当前 NLI backbone 的 `max_position_embeddings`。不同 backbone 的最大长度不同（如 base=512、部分长上下文模型更长），切分粒度随所用模型自适应调整。
+2. **共享图结构**：claim / doc 三元组图不做切分，所有 chunk 共享同一张 **$G_{\text{claim}}$** 与 **$G_{\text{doc}}$**。
+3. **逐块打分**：每个 chunk 独立前向，得到各自的 NLI logits，并提取 entailment（支持）类概率 **$p_i$**。
+4. **聚合决策**：取所有 chunk 中的最大支持概率作为该样本的最终置信度，再与阈值 0.5 比较得到二值预测：
+
+$$
+p_{\text{final}} = \max_i p_i, \quad \hat{y} = \mathbb{1}[p_{\text{final}} > 0.5]
+$$
+
+该策略对齐 MiniCheck 等事实核查模型的 chunk + max 聚合范式，在有限上下文窗口下尽可能保留长文档信息。
+
+#### 4.2 批量推理与指标计算
+
+训练完成后，使用 `graph_match_nli/evaluate.py` 加载检查点，对各 benchmark 批量推理（可通过 `inference.chunked` 开关控制是否启用分块），将 `pred_label` / `pred_prob` 写入各数据集的 `our_results/` 目录。最终指标由 `evaluation/evaluate.py` 统一计算，主指标为 **BAcc**（平衡准确率）。
 
 **启动命令示例**：
 
@@ -101,3 +126,6 @@ python graph_match_nli/evaluate.py --ckpt models/graph_match/best_f1.pt
 # 评估
 python evaluation/evaluate.py --config configs/evaluation.yaml
 ```
+
+```
+

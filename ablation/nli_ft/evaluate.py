@@ -75,6 +75,10 @@ def evaluate():
     parser.add_argument('--config', default=None)
     parser.add_argument('--ckpt', default=None)
     parser.add_argument('--dataset', default=None)
+    parser.add_argument(
+        '--zero-shot', action='store_true',
+        help="直接使用 nli_model_path 预训练权重推理，不加载微调 checkpoint",
+    )
     args = parser.parse_args()
 
     base_dir = _PROJ_ROOT
@@ -94,7 +98,7 @@ def evaluate():
     ckpt_path = args.ckpt if args.ckpt else resolve(config['training']['best_f1_path'])
     if not os.path.isabs(ckpt_path) and args.ckpt:
         ckpt_path = resolve(args.ckpt)
-    if not os.path.exists(ckpt_path):
+    if not args.zero_shot and not os.path.exists(ckpt_path):
         raise FileNotFoundError(f"检查点不存在: {ckpt_path}")
 
     _dev = config['model']['device']
@@ -103,17 +107,24 @@ def evaluate():
     device = torch.device(_dev)
 
     print(f"设备: {device}")
-    print(f"加载: {ckpt_path}")
-    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-
     tokenizer = AutoTokenizer.from_pretrained(nli_model_path, use_fast=False)
     model = AutoModelForSequenceClassification.from_pretrained(nli_model_path).to(device)
-    model.load_state_dict(ckpt['model_state_dict'])
+    if args.zero_shot:
+        print(f"零样本推理: {nli_model_path}")
+    else:
+        print(f"加载: {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt['model_state_dict'])
+        print(
+            f"Epoch {ckpt.get('epoch')} | Val F1={ckpt.get('val_f1', 0):.4f} | "
+            f"entailment={resolve_nli_label_spec(model.config.id2label).entailment_id}, "
+            f"hallucination={resolve_nli_label_spec(model.config.id2label).hallucination_id}"
+        )
     model.eval()
     label_spec = resolve_nli_label_spec(model.config.id2label)
     print(
-        f"Epoch {ckpt.get('epoch')} | Val F1={ckpt.get('val_f1', 0):.4f} | "
-        f"entailment={label_spec.entailment_id}, hallucination={label_spec.hallucination_id}"
+        f"NLI 标签映射: entailment={label_spec.entailment_id}, "
+        f"hallucination={label_spec.hallucination_id}"
     )
 
     datasets = config['data'].get('datasets', [])
@@ -142,7 +153,11 @@ def evaluate():
             print(f"  [Skip] 不存在: {test_path}")
             continue
 
-        output_path = os.path.join(data_root, dataset_name, 'ablation_results', output_filename)
+        output_path = os.path.join(
+            data_root, dataset_name,
+            config['data'].get('result_subdir', 'ablation_results'),
+            output_filename,
+        )
         print(f"  输入: {test_path}")
         print(f"  输出: {output_path}")
 

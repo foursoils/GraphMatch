@@ -1,0 +1,19 @@
+stage2_augment:
+  # v2：相对 stage2_augment.yaml（20%/10%/70%）提高抽样比例，尤其是给样本量最小的
+  # AggreFact-CNN（原始仅 558 条）更多训练信号。held-out 用独立命名（_holdout_v2），
+  # 与 v1 的 held-out 文件互不覆盖，可分别对比评估。
+  data_root: "../data"
+  source_file: "gemma_26b_tk.parquet"
+  datasets:
+    - AggreFact-CNN
+    - Reveal
+    - ExpertQA
+
+  train_ratio: 0.4
+  val_ratio: 0.15
+  # 剩余 0.45 作为 held-out
+  seed: 42
+  holdout_tag: "v2"
+
+  merged_train_output: "../data/stage2_augment_v2/train.parquet"
+  merged_val_output: "../data/stage2_augment_v2/val.parquet"

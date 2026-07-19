@@ -1,0 +1,32 @@
+ablation:
+  nli_ft:
+    data:
+      test_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/test.parquet"
+      data_root: "../data"
+      output_filename: "roberta-large-mnli-zeroshot.parquet"
+      result_subdir: "ablation_results"
+      datasets:
+        - AggreFact-CNN
+        - AggreFact-XSum
+        - ExpertQA
+        - SCIFACT
+        - Reveal
+        - WiCE
+        - LFQA
+        - TofuEval-MediaSum
+        - minicheck
+
+    model:
+      # 未经任何微调的原始 roberta-large-mnli 预训练权重，作为完全没有 stage1/图融合的原始基线
+      nli_model_path: "../models/nlis/roberta-large-mnli"
+      max_length: 512
+      device: "cuda"
+
+    inference:
+      chunked: true
+      chunk_size: 400
+      chunk_batch_size: 12
+
+    training:
+      test_batch_size: 24
+      best_f1_path: "../models/nlis/roberta-large-mnli"  # 占位，--zero-shot 模式下不会被加载

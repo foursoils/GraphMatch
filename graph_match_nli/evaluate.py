@@ -164,6 +164,12 @@ def evaluate():
     if chunked:
         print(f"  [分块推理] 已启用: chunk_size={chunk_size}, chunk_batch_size={chunk_batch_size}")
 
+    # 按数据集校准的判决阈值（见 configs/graph_match_nli_stage2_v2.yaml 的 data.thresholds，
+    # 由 data_preparation/tune_threshold.py 在验证集上选出，用于提升 BAcc）
+    thresholds = config['data'].get('thresholds', {})
+    if thresholds:
+        print(f"  [阈值校准] 已加载 {len(thresholds)} 个数据集的自定义阈值: {thresholds}")
+
     for dataset_name in datasets:
         print(f"\n{'='*60}")
         print(f"[Dataset] {dataset_name}")
@@ -172,7 +178,23 @@ def evaluate():
         if dataset_name.lower() == 'minicheck':
             test_path = resolve(config['data']['test_parquet'])
         else:
-            test_path = os.path.join(data_root, dataset_name, 'data_with_graph', 'gemma_26b_tk.parquet')
+            default_path = os.path.join(data_root, dataset_name, 'data_with_graph', 'gemma_26b_tk.parquet')
+            # holdout_tag：区分不同抽样比例版本的 held-out 文件（见
+            # data_preparation/split_stage2_augment.py），未设置时用旧版无 tag 命名，
+            # 保持向后兼容
+            holdout_tag = config['data'].get('holdout_tag', '')
+            holdout_name = (
+                f"gemma_26b_tk_holdout_{holdout_tag}.parquet" if holdout_tag
+                else "gemma_26b_tk_holdout.parquet"
+            )
+            holdout_path = os.path.join(data_root, dataset_name, 'data_with_graph', holdout_name)
+            # 若该数据集曾被抽样用于训练/验证（见 data_preparation/split_stage2_augment.py），
+            # 则优先使用 held-out 部分评估，确保训练/验证样本不混入最终评估集
+            if os.path.exists(holdout_path):
+                test_path = holdout_path
+                print(f"  [Held-out] 检测到该数据集参与过训练抽样，改用 held-out 子集评估（排除训练/验证样本）")
+            else:
+                test_path = default_path
 
         if not os.path.exists(test_path):
             print(f"  [Skip] 输入文件不存在 -> {test_path}")
@@ -221,6 +243,14 @@ def evaluate():
                     all_preds.extend(preds.cpu().numpy().tolist())
                     all_probs.extend(probs.cpu().numpy().tolist())
                     all_labels.extend(labels.cpu().numpy().tolist())
+
+        # 可选：按数据集使用校准后的判决阈值（在独立验证集上选出，与 held-out 测试集无关，
+        # 不改变模型权重，只调整 support 概率 -> 二分类标签的判决边界）。
+        # 见 data_preparation/tune_threshold.py。未在 thresholds 中配置的数据集维持默认 0.5。
+        threshold = thresholds.get(dataset_name, 0.5)
+        if threshold != 0.5:
+            all_preds = [1 if p > threshold else 0 for p in all_probs]
+            print(f"  [阈值校准] {dataset_name} 使用校准阈值 {threshold:.2f}（默认 0.5）")
 
         # 写出预测结果
         out_df = test_ds.df.copy()

@@ -5,10 +5,12 @@ NLI-Graph 融合幻觉检测模型
   1. GMN 子图匹配（复用 graph_match/model.py 的 GMNPropLayer）
        - 输入: Claim 图 G_C、Doc 子图 G_D（SentenceTransformer 嵌入）
        - 输出: 节点级对齐向量 [N, node_hidden_dim]、图级全局向量 [B, node_hidden_dim]
-  2. NLI 编码器（DeBERTa-v3 backbone）
+  2. NLI 编码器（backbone 由 config.model.nli_model_path 指定，通过 AutoModel/AutoConfig
+     通用加载，已验证兼容 DeBERTa-v3、RoBERTa 等 encoder.layer[i].attention 结构的模型；
+     当前默认使用 FacebookAI/roberta-large-mnli）
        - 支持两种权重来源：
-           a) 已在 NLI/事实核查任务上微调过的分类 checkpoint（如 MiniCheck 系列）
-              → config 里有 architectures=XxxForSequenceClassification，可复用其 id2label 语义与分类头权重
+           a) 已在 NLI/事实核查任务上微调过的分类 checkpoint（如 roberta-large-mnli）
+              → config 里有 architectures=XxxForSequenceClassification，可复用其 id2label 语义
            b) 纯预训练 backbone（如裸的 microsoft/deberta-v3-large，无分类头、无 id2label）
               → 分类头随机初始化，标签约定直接对齐数据集（1=support/0=hallucination）
        - 前 k 层正常运行，得到隐状态 h_k [B, seq, hidden_size]
@@ -51,11 +53,11 @@ def _is_finetuned_classifier_checkpoint(config) -> bool:
 
 
 # ────────────────────────────────────────────────────────────────────────────
-# Cross-Attention 注入层：将 GMN 节点嵌入注入 DeBERTa 隐状态
+# Cross-Attention 注入层：将 GMN 节点嵌入注入 NLI 编码器隐状态
 # ────────────────────────────────────────────────────────────────────────────
 class GraphCrossAttentionLayer(nn.Module):
     """
-    query: h_k  [B, seq_len, hidden_size]（DeBERTa 第 k 层输出）
+    query: h_k  [B, seq_len, hidden_size]（NLI 编码器第 k 层输出）
     key/value: 节点嵌入（claim + doc 合并）[total_nodes, node_hidden_dim]
 
     对 batch 中第 i 个样本，仅用该样本对应的节点作为 key/value。
@@ -67,7 +69,7 @@ class GraphCrossAttentionLayer(nn.Module):
         self.num_heads = num_heads
         self.head_dim = hidden_size // num_heads
 
-        # 节点嵌入投影到 DeBERTa 隐层维度
+        # 节点嵌入投影到 NLI 编码器隐层维度
         self.node_proj = nn.Linear(node_hidden_dim, hidden_size)
 
         # Multi-head Cross-Attention
@@ -156,10 +158,11 @@ class GraphCrossAttentionLayer(nn.Module):
 # ────────────────────────────────────────────────────────────────────────────
 class NLIGraphClassifier(nn.Module):
     """
-    GMN + DeBERTa-v3 融合幻觉检测模型
-    （DeBERTa 侧既可以是已微调的 NLI 分类 checkpoint，也可以是纯预训练 backbone + 随机分类头）
+    GMN + NLI 编码器融合幻觉检测模型
+    （NLI 编码器侧既可以是已微调的 NLI 分类 checkpoint，也可以是纯预训练 backbone + 随机分类头；
+     当前默认使用 FacebookAI/roberta-large-mnli）
 
-    注入位置 inject_layer_k: DeBERTa 第 k 层（1-indexed）之后插入 Cross-Attention
+    注入位置 inject_layer_k: NLI 编码器第 k 层（1-indexed）之后插入 Cross-Attention
     """
     def __init__(self,
                  nli_model_path: str,
@@ -173,9 +176,9 @@ class NLIGraphClassifier(nn.Module):
                  freeze_nli_layers: int = 0,
                  num_labels: int = 2):
         """
-        :param nli_model_path:    本地 DeBERTa 模型路径（可以是纯预训练 backbone，也可以是已微调的 NLI 分类 checkpoint）
-        :param inject_layer_k:    在 DeBERTa 第 k 层后注入图信息（base=12 层, large=24 层）
-        :param freeze_nli_layers: 冻结 DeBERTa 前 N 层（0 = 全部参与训练）
+        :param nli_model_path:    本地 NLI 编码器模型路径（可以是纯预训练 backbone，也可以是已微调的 NLI 分类 checkpoint）
+        :param inject_layer_k:    在 NLI 编码器第 k 层后注入图信息（base=12 层, large=24 层）
+        :param freeze_nli_layers: 冻结 NLI 编码器前 N 层（0 = 全部参与训练）
         :param num_labels:        当 nli_model_path 是纯预训练 backbone（无 id2label 语义）时使用的分类数，
                                    目前只支持二分类；若 nli_model_path 是已微调的分类 checkpoint，
                                    实际类别数以其 config.id2label 为准，此参数会被忽略
@@ -192,7 +195,7 @@ class NLIGraphClassifier(nn.Module):
             dropout=dropout,
         )
 
-        # ── DeBERTa 编码器（只取 encoder body，不含分类头）─────────────────
+        # ── NLI 编码器（只取 encoder body，不含分类头）─────────────────
         config = AutoConfig.from_pretrained(nli_model_path)
         self.nli_encoder = AutoModel.from_pretrained(nli_model_path, config=config)
         hidden_size = config.hidden_size
@@ -263,7 +266,9 @@ class NLIGraphClassifier(nn.Module):
         try:
             from transformers import AutoModelForSequenceClassification
             pretrained = AutoModelForSequenceClassification.from_pretrained(model_path)
-            # DeBERTa 分类头在 classifier 或 pooler+classifier
+            # 分类头在 classifier 或 pooler+classifier（注：RobertaClassificationHead 是
+            # dense+out_proj 的子模块而非单层 nn.Linear，形状检查会天然不匹配从而跳过复用，
+            # 分类头随机初始化——这是有意为之，便于不同 backbone 之间公平对比）
             if hasattr(pretrained, 'classifier'):
                 cls_state = pretrained.classifier.state_dict()
                 # 若权重形状匹配则加载
@@ -279,7 +284,7 @@ class NLIGraphClassifier(nn.Module):
                 token_type_ids: torch.Tensor,
                 graph_batch) -> torch.Tensor:
         """
-        input_ids / attention_mask / token_type_ids: DeBERTa tokenizer 输出
+        input_ids / attention_mask / token_type_ids: NLI 编码器 tokenizer 输出
             格式: [CLS] doc tokens [SEP] claim tokens [SEP]
             shape: [B, seq_len]
         graph_batch: PyG PairData batch（含 x_s/x_t/edge_index_s/edge_index_t 等）
@@ -302,11 +307,12 @@ class NLIGraphClassifier(nn.Module):
         node_batch_all = torch.cat([batch_c, batch_d], dim=0)
 
         # ── Step 2: 注册 forward hook，在第 k 层 Attention 输出后注入图信息 ────────
-        # 使用 hook 而非手动逐层调用，避免触碰 DeBERTa-v3 内部
-        # rel_embeddings / query_states / attention_mask 格式等细节
+        # 使用 hook 而非手动逐层调用，避免触碰 encoder 内部实现细节（不同 backbone 的
+        # attention 子模块返回格式略有差异，例如 DeBERTa-v3 的 query_states/rel_embeddings，
+        # RoBERTa 的 (hidden, attn_weights) 等），hook 方式对任意 backbone 都通用
         def _inject_hook(module, layer_input, layer_output):
-            # DeBERTa 层在 query_states=None 时返回纯 tensor [B, seq, hidden_size]
-            # 在 query_states!=None 时返回 (hidden, query) tuple
+            # 部分 backbone 的 attention 子模块返回纯 tensor [B, seq, hidden_size]，
+            # 部分返回 (hidden, ...) tuple（如需要输出 attention weights 时）
             # 统一取出 hidden_states，注入后再还原原始格式
             is_tuple = isinstance(layer_output, tuple)
             h = layer_output[0] if is_tuple else layer_output
@@ -326,7 +332,7 @@ class NLIGraphClassifier(nn.Module):
         target_submodule = self.nli_encoder.encoder.layer[self.inject_layer_k - 1].attention
         hook = target_submodule.register_forward_hook(_inject_hook)
 
-        # ── Step 3: DeBERTa 完整前向（内部自动处理 rel_embeddings 等）──────
+        # ── Step 3: NLI 编码器完整前向（内部自动处理位置编码等细节）──────
         try:
             encoder_outputs = self.nli_encoder(
                 input_ids=input_ids,

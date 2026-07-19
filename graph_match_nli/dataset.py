@@ -9,7 +9,7 @@ _PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJ_ROOT not in sys.path:
     sys.path.insert(0, _PROJ_ROOT)
 
-from utils.dataset_utils import build_pair_data, load_precomputed_embeddings, split_doc_into_chunks
+from utils.dataset_utils import build_pair_data, load_precomputed_embeddings, normalize_graph_text, split_doc_into_chunks
 from utils.path_utils import is_rank0, log_rank0
 
 class NLIGraphDataset(Dataset):
@@ -24,9 +24,9 @@ class NLIGraphDataset(Dataset):
                  preload_to_memory: bool = True):
         """
         :param parquet_path:         含 doc / claim / graph_claim / subgraph_doc / label 的 Parquet
-        :param tokenizer:            DeBERTa tokenizer（外部传入，避免多次加载）
+        :param tokenizer:            NLI 编码器 tokenizer（外部传入，避免多次加载）
         :param embedding_model_path: SentenceTransformer 路径（用于图节点 Embedding）
-        :param max_length:           DeBERTa 最大序列长度
+        :param max_length:           NLI 编码器最大序列长度
         :param device:               Embedding 编码设备
         :param emb_dim:              节点 Embedding 维度（Qwen3-Embedding-0.6B=1024）
         :param embed_cache_path:     预计算 Embedding 路径 (.pt)
@@ -66,7 +66,7 @@ class NLIGraphDataset(Dataset):
             all_texts = set()
             for trips in claim_triplets + doc_triplets:
                 for tri in trips:
-                    all_texts.update(tri)
+                    all_texts.update(normalize_graph_text(x) for x in tri)
             all_texts = list(all_texts)
             log_rank0(f"共 {len(all_texts)} 个唯一文本，开始编码...")
 
@@ -103,7 +103,10 @@ class NLIGraphDataset(Dataset):
             if isinstance(result, list) and all(
                 isinstance(t, list) and len(t) == 3 for t in result
             ):
-                return result
+                return [
+                    [normalize_graph_text(x) for x in tri]
+                    for tri in result
+                ]
         except Exception:
             pass
         return []
@@ -112,7 +115,7 @@ class NLIGraphDataset(Dataset):
         return len(self.df)
 
     def _tokenize(self, doc_text: str, claim_text: str):
-        """对 (doc_text, claim_text) 做 DeBERTa 编码，返回定长的 input_ids / attention_mask / token_type_ids。"""
+        """对 (doc_text, claim_text) 做 NLI 编码器 tokenizer 编码，返回定长的 input_ids / attention_mask / token_type_ids。"""
         encoding = self.tokenizer(
             doc_text,
             claim_text,
@@ -147,7 +150,7 @@ class NLIGraphDataset(Dataset):
         row = self.df.iloc[idx]
         label = int(row['label'])
 
-        # ── DeBERTa 文本输入（整篇 doc，超长部分按 max_length 截断）──────
+        # ── NLI 编码器文本输入（整篇 doc，超长部分按 max_length 截断）──────
         doc_text   = str(row.get('doc',   ''))
         claim_text = str(row.get('claim', ''))
         input_ids, attention_mask, token_type_ids = self._tokenize(doc_text, claim_text)

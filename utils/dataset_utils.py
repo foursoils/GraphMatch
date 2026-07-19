@@ -74,6 +74,20 @@ class PairData(Data):
 # ---------------------------------------------------------------------------
 # 图文本化
 # ---------------------------------------------------------------------------
+def normalize_graph_text(value) -> str:
+    """将三元组节点/边文本统一为可哈希字符串（兼容嵌套 list）。"""
+    if value is None:
+        return ' '
+    if isinstance(value, str):
+        text = value.strip()
+        return text.lower() if text else ' '
+    if isinstance(value, (list, tuple)):
+        text = ' / '.join(str(x).strip() for x in value if x is not None).strip()
+        return text.lower() if text else ' '
+    text = str(value).strip()
+    return text.lower() if text else ' '
+
+
 def textualize_graph(graph_str: str):
     """将 JSON 格式三元组字符串解析为 nodes_df 和 edges_df。"""
     if not graph_str or not isinstance(graph_str, str):
@@ -93,9 +107,9 @@ def textualize_graph(graph_str: str):
         if not isinstance(tri, list) or len(tri) != 3:
             continue
         src, edge_attr, dst = tri
-        src       = (src       or ' ').lower().strip()
-        edge_attr = (edge_attr or ' ').lower().strip()
-        dst       = (dst       or ' ').lower().strip()
+        src       = normalize_graph_text(src)
+        edge_attr = normalize_graph_text(edge_attr)
+        dst       = normalize_graph_text(dst)
         if src not in nodes_dict:
             nodes_dict[src] = len(nodes_dict)
         if dst not in nodes_dict:

@@ -19,3 +19,4 @@ models/**
 # Exclude all contents of the data/embeddings/ directory except the .gitkeep file
 data/embeddings/*
 !data/embeddings/.gitkeep
+data/minicheck copy/

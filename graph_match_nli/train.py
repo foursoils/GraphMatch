@@ -4,7 +4,8 @@ NLI-Graph 融合模型训练脚本
 流程:
   1. 加载 configs/graph_match_nli.yaml
   2. 构建 NLIGraphDataset（tokenizer 输入 + 图对）
-  3. 训练 NLIGraphClassifier（GMN + DeBERTa 中间层注入）
+  3. 训练 NLIGraphClassifier（GMN + NLI 编码器中间层注入，backbone 由
+     config.model.nli_model_path 指定，当前为 FacebookAI/roberta-large-mnli）
   4. Early Stopping，按 val F1 保存最优检查点
   5. 训练 log 写入模型目录下的 train.log
 
@@ -210,6 +211,19 @@ def run_training(local_rank: int, world_size: int, config: dict, base_dir: str):
         num_labels          = config['model'].get('num_labels', 2),
     ).to(device).float()   # MPS 上强制 float32，避免 f16/f32 混合导致崩溃
 
+    # ── 可选：从已有 checkpoint 继续训练（两阶段 continual fine-tuning） ──
+    # 典型场景：先在 minicheck 上训练出 best_f1.pt，再在别的（如低分数据集抽样出的）
+    # 训练集上继续训练+验证，避免从 NLI 原始权重重新学起。
+    init_ckpt = config['training'].get('init_ckpt')
+    if init_ckpt:
+        init_ckpt_path = resolve(init_ckpt)
+        if not os.path.exists(init_ckpt_path):
+            raise FileNotFoundError(f"init_ckpt 不存在: {init_ckpt_path}")
+        log(f"[Init] 从已有 checkpoint 继续训练: {init_ckpt_path}")
+        _ckpt = torch.load(init_ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(_ckpt['model_state_dict'])
+        log(f"  已加载权重（来自 Epoch {_ckpt.get('epoch')}，Val F1={_ckpt.get('val_f1', 0):.4f}）")
+
     total_params     = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     label_spec = model.label_spec
@@ -219,20 +233,25 @@ def run_training(local_rank: int, world_size: int, config: dict, base_dir: str):
         f"hallucination={label_spec.hallucination_id}, num_labels={label_spec.num_labels}"
     )
 
-    # ── 差异化学习率：DeBERTa 用更小 lr，GMN + 注入层用较大 lr ────────────
+    # ── 差异化学习率：NLI 编码器（预训练 backbone）用更小 lr，GMN + 注入层 +
+    # 分类头（随机初始化的新模块）用正常量级 lr ──────────────────────────
     # 注意：必须在 DDP 包装之前拿到参数引用（DDP 不会转发 .nli_encoder 等属性访问）
-    deberta_params = [p for p in model.nli_encoder.parameters() if p.requires_grad]
+    encoder_params = [p for p in model.nli_encoder.parameters() if p.requires_grad]
     other_params   = [p for p in model.parameters()
-                      if p.requires_grad and not any(p is q for q in deberta_params)]
+                      if p.requires_grad and not any(p is q for q in encoder_params)]
 
     if is_dist:
         model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
-    lr_base   = config['training']['learning_rate']
-    lr_deberta = lr_base * config['training'].get('deberta_lr_ratio', 0.1)
+    lr_base = config['training']['learning_rate']
+    # encoder_lr_ratio 为新键名；兼容旧配置里遗留的 deberta_lr_ratio
+    lr_ratio = config['training'].get(
+        'encoder_lr_ratio', config['training'].get('deberta_lr_ratio', 0.1)
+    )
+    lr_encoder = lr_base * lr_ratio
 
     optimizer = AdamW([
-        {'params': deberta_params, 'lr': lr_deberta},
+        {'params': encoder_params, 'lr': lr_encoder},
         {'params': other_params,   'lr': lr_base},
     ], weight_decay=config['training'].get('weight_decay', 0.01))
 
@@ -354,7 +373,7 @@ def run_training(local_rank: int, world_size: int, config: dict, base_dir: str):
 
         if is_main:
             cur_lr_main    = optimizer.param_groups[1]['lr']
-            cur_lr_deberta = optimizer.param_groups[0]['lr']
+            cur_lr_encoder = optimizer.param_groups[0]['lr']
 
             # 过拟合警告：Train-Val Loss 差距 + Val F1 差距
             gap_loss = val_loss - train_loss
@@ -367,7 +386,7 @@ def run_training(local_rank: int, world_size: int, config: dict, base_dir: str):
                 f"  Epoch {epoch:02d} | "
                 f"Train L={train_loss:.4f} Acc={train_acc:.4f} F1={train_f1:.4f} | "
                 f"Val L={val_loss:.4f} Acc={val_acc:.4f} F1={val_f1:.4f} AUC={val_auc:.4f} | "
-                f"LR(main/deberta)={cur_lr_main:.2e}/{cur_lr_deberta:.2e}{warn}"
+                f"LR(new_modules/encoder)={cur_lr_main:.2e}/{cur_lr_encoder:.2e}{warn}"
             )
 
         # ── 早停判断与 checkpoint 保存：只在主进程决策，再广播给其余 rank ──

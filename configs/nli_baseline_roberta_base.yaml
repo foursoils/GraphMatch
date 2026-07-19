@@ -1,0 +1,33 @@
+ablation:
+  nli_ft:
+    data:
+      train_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/train.parquet"
+      val_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/val.parquet"
+      test_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/test.parquet"
+      data_root: "../data"
+      result_subdir: "contrast_results"
+      output_filename: "roberta-large-mnli.parquet"
+      datasets:
+        - AggreFact-CNN
+        - AggreFact-XSum
+        - ExpertQA
+        - SCIFACT
+        - Reveal
+        - WiCE
+        - LFQA
+        - TofuEval-MediaSum
+        - minicheck
+
+    model:
+      nli_model_path: "../models/nlis/roberta-large-mnli"
+      max_length: 512
+      device: "cuda"
+
+    inference:
+      chunked: true
+      chunk_size: 400
+      chunk_batch_size: 16
+
+    training:
+      test_batch_size: 32
+      best_f1_path: "../models/nli_ft/best_f1.pt"

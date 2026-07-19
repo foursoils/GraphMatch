@@ -4,7 +4,7 @@ nli_graph:
     val_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/val.parquet"
     test_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/test.parquet"
     data_root: "../data"
-    output_filename: "deberta-v3-large.parquet"
+    output_filename: "roberta-large-mnli.parquet"
     datasets:
       - AggreFact-CNN
       - AggreFact-XSum
@@ -17,18 +17,21 @@ nli_graph:
       - minicheck
 
   model:
-    # NLI 编码器：MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli（3-class NLI）
-    # entailment / neutral / contradiction；训练时 1→entailment，0→contradiction
-    nli_model_path: "../models/nlis/deberta-v3-large"
+    # NLI 编码器：FacebookAI/roberta-large-mnli（RoBERTa-large，3-class NLI，MIT 许可）
+    # id2label: 0=CONTRADICTION, 1=NEUTRAL, 2=ENTAILMENT；仅在 MNLI 上微调，
+    # 不含 FEVER/ANLI/MiniCheck 监督，用作与 MiniCheck 对比方法完全独立的初始化。
+    # 训练时 label_spec 自动解析：entailment_id=2（支持），hallucination_id=0（contradiction，即幻觉）
+    nli_model_path: "../models/nlis/roberta-large-mnli"
     # 节点 Embedding 模型
     embedding_model_path: "../models/embeddings/Qwen3-Embedding-0.6B"
     device: "cuda"
 
     # 分类数：仅当 nli_model_path 为纯预训练 backbone 时生效；
-    # MoritzLaurer 等已微调 NLI checkpoint 会以其 config.id2label 为准（当前为 3-class）
+    # 当前 roberta-large-mnli 是已微调分类 checkpoint，会以其 config.id2label 为准（3-class），此项被忽略
     num_labels: 3
 
-    # DeBERTa 输入长度：deberta-v3-large 的 max_position_embeddings=512，不能超过
+    # RoBERTa-large 输入长度：max_position_embeddings=514（含 2 个特殊位置），
+    # 有效可用序列长度为 512，不能超过
     max_length: 512
 
     # GMN 参数（v3：回归 v1 验证可行的 dim=256，避免 dim=512 训练不动 + 容量过剩）
@@ -36,13 +39,13 @@ nli_graph:
     node_hidden_dim: 512
     num_prop_layers: 3
 
-    # 图信息注入位置（large 共 24 层，取中间偏后）
+    # 图信息注入位置（RoBERTa-large 共 24 层，与 DeBERTa-v3-large 层数一致，取中间偏后）
     inject_layer_k: 12
 
-    # Cross-Attention 头数（需整除 hidden_size=1024）
+    # Cross-Attention 头数（需整除 hidden_size=1024，与 DeBERTa-v3-large 相同）
     num_heads: 8
 
-    # 冻结前 16 层 DeBERTa：只训后 8 层 + 分类头
+    # 冻结前 12 层 RoBERTa：只训后 12 层 + 分类头，保留 MNLI 阶段学到的通用语言/推理能力
     freeze_nli_layers: 12
 
     # 强 dropout
@@ -67,13 +70,18 @@ nli_graph:
     test_batch_size: 24 # 测试推理 batch（evaluate.py）
     accum_steps: 4
     tensor_parallel_size: 1 # 新增: 内置多卡进程数量（1表示单卡，>1表示自动多卡DDP，需要至少同等数量GPU）
-    learning_rate: 0.000005 # 1e-5（large 模型略低于 base）
-    deberta_lr_ratio: 2 # DeBERTa LR = 4e-6
+    # GMN / Cross-Attention 注入层 / 图级投影 / 分类头都是随机初始化，用常规量级学习率从零学习
+    learning_rate: 0.0001 # 1e-4，仅作用于上述新模块（对应 train.py 中的 "other_params"）
+    # RoBERTa 编码器已在 MNLI 上收敛，需要更小 LR 微调，避免破坏其已学到的语言/推理能力：
+    # encoder LR = learning_rate × encoder_lr_ratio = 1e-4 × 0.05 = 5e-6
+    # 注：此前 deberta_lr_ratio=2 会让编码器 LR 高于新模块，与"编码器应更低 LR"的设计意图相反，此处已修正
+    encoder_lr_ratio: 0.05
     weight_decay: 0.05 # L2 正则强化
     label_smoothing: 0.05 # 分类标签平滑，抑制模型过度自信
     warmup_ratio: 0.1 # cosine 调度前 10% steps 线性 warmup
-    num_epochs: 15 # cosine 调度配合：到末尾 LR 降到 ~0
+    num_epochs: 3 # 按需求限定为 2~3 轮，cosine 调度按此总轮数计算衰减
     # 保存策略：按 Val F1 选最优；训练 log 写在同目录 train.log
-    patience: 4 # 连续 4 epoch Val F1 不改善则停
-    best_f1_path: "../models/graph_match/best_f1.pt"
+    patience: 3 # 轮数已很少，patience 设为不小于 num_epochs，避免中途早停
+    # 按 backbone 分子目录保存，避免与其他 NLI 编码器（如 deberta-v3-large）的检查点相互覆盖
+    best_f1_path: "../models/graph_match/roberta_large_mnli/best_f1.pt"
     seed: 42
