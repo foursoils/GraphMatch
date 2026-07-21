@@ -28,6 +28,7 @@ embedding_preparation:
     - ExpertQA
     - summeval
     - SCIFACT
+    - minicheck
     - LFQA
     - TofuEval-MediaSum
     - WiCE

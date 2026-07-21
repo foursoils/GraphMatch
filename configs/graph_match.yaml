@@ -26,11 +26,11 @@ graph_match:
     inject_layer: 12          # Gemma3-1B 共 26 层，约中间偏后（原 Qwen3-4B 36 层时用 18）
     cross_attn_heads: 8       # hidden_size=1152，8 头可整除
     max_txt_len: 2048
-    max_new_tokens: 6
+    max_new_tokens: 2
 
   gmn:
     in_dim: 1024
-    hidden_dim: 728
+    hidden_dim: 512
     num_layers: 3
     dropout: 0.3
 
@@ -43,17 +43,17 @@ graph_match:
       - "k_proj"
       - "v_proj"
       - "o_proj"
-      - "gate_proj"
-      - "up_proj"
-      - "down_proj"
+      # - "gate_proj"
+      # - "up_proj"
+      # - "down_proj"
 
   training:
     gpu_ids: "0"
     mixed_precision: "bf16"
     seed: 42
-    num_epochs: 7
+    num_epochs: 2
     batch_size: 1
-    eval_batch_size: 16
+    eval_batch_size: 8
     grad_accum_steps: 16
     num_workers: 2
     lora_lr: 5.0e-6

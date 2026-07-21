@@ -1,0 +1,74 @@
+[Log] 训练日志: C:\Projects\GraphMatch\log\graph_match\train_20260721_220455.log
+[Log] 配置文件: C:\Projects\GraphMatch\configs\graph_match.yaml
+[Log] 启动时间: 2026-07-21T22:04:55
+data:
+  data_root: ../data
+  datasets:
+  - AggreFact-CNN
+  - AggreFact-XSum
+  - ExpertQA
+  - summeval
+  - SCIFACT
+  - minicheck
+  - LFQA
+  - TofuEval-MediaSum
+  - WiCE
+  output_filename: gemma3_1b.parquet
+  train_embed_file: ../data/embeddings/Qwen3-Embedding-0.6B/minicheck/gemma_26b_tk/train.pt
+  train_file: ../data/minicheck/data_with_graph/gemma_26b_tk/train.parquet
+  val_embed_file: ../data/embeddings/Qwen3-Embedding-0.6B/minicheck/gemma_26b_tk/val.pt
+  val_file: ../data/minicheck/data_with_graph/gemma_26b_tk/val.parquet
+gmn:
+  dropout: 0.3
+  hidden_dim: 512
+  in_dim: 1024
+  num_layers: 3
+infer:
+  batch_size: 16
+  gpu_ids: '0'
+  num_workers: 16
+  test_limit: 0
+lora:
+  lora_alpha: 16
+  lora_dropout: 0.15
+  r: 8
+  target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+model:
+  attn_implementation: eager
+  cross_attn_heads: 8
+  embed_model_path: ../models/embeddings/Qwen3-Embedding-0.6B
+  inject_layer: 12
+  llm_model_path: ../models/llms/gemma-3-1b-it
+  max_new_tokens: 2
+  max_txt_len: 2048
+  system_prompt_path: ../prompts/hallu_detect/system_prompt.txt
+training:
+  aux_cosine_target: 0.3
+  aux_lambda: 0.5
+  aux_lambda_start: 0.2
+  aux_lambda_warmup_epochs: 2
+  batch_size: 1
+  eval_batch_size: 8
+  gpu_ids: '0'
+  grad_accum_steps: 16
+  graph_lr: 5.0e-05
+  log_dir: ../log/graph_match
+  lora_lr: 5.0e-06
+  mixed_precision: bf16
+  num_epochs: 2
+  num_workers: 2
+  output_dir: ../models/graph_match
+  patience: 3
+  seed: 42
+  train_target: answer_only
+  val_sample: false
+  val_sample_size: 300
+  warmup_ratio: 0.1
+  weight_decay: 0.1
+
+
+[1/4] 初始化模型...

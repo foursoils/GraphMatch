@@ -6,7 +6,7 @@ evaluation:
   result_dirs:
     - contrast_results
     # - ablation_results
-    # - our_results
+    - our_results
 
   # 需要评估的数据集列表
   datasets:
@@ -25,14 +25,10 @@ evaluation:
     # - gpt_5.4_tk
     # - qwen3.5_2b_tk
     # - claude_4.6_tk
-    # - deberta-v3-base
-    # - deberta-v3-base-512
-    # - gemma_31b_tk
     # - glm_5_tk
-    # - deberta-v3-base
-    - claude_4.6_tk
-    # - gemma3_1b
-    # - gemma4_e2b_it_tk
+    # - claude_4.6_tk
+    - gemma_3_1b
+
 
   # 列名配置
   columns:

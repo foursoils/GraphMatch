@@ -130,7 +130,7 @@ def train():
 
     try:
         _run_training_loop(
-            accelerator, train_cfg, model_cfg,
+            accelerator, config, train_cfg,
             train_file, val_file, embed_path, output_dir,
             train_embed, val_embed, grad_accum,
         )
@@ -140,7 +140,7 @@ def train():
 
 
 def _run_training_loop(
-    accelerator, train_cfg, model_cfg,
+    accelerator, config, train_cfg,
     train_file, val_file, embed_path, output_dir,
     train_embed, val_embed, grad_accum,
 ):
