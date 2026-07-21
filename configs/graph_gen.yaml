@@ -1,0 +1,49 @@
+minicheck:
+  data:
+    data_root: "../data"
+    output_root: "../data"
+    input_subdir: "processed_data"
+    input_filename: "with_id.parquet"
+    output_subdir: "data_with_graph"
+    output_filename: "gemma_31b_tk.parquet"
+    datasets:
+      - AggreFact-CNN
+      - AggreFact-XSum
+      - ExpertQA
+      - summeval
+      - SCIFACT
+      - minicheck
+      - LFQA
+      - TofuEval-MediaSum
+      - WiCE
+
+  model:
+    max_new_tokens: 4096
+    temperature: 0.6
+    top_p: 0.95
+    top_k: 20
+    min_p: 0.0
+    presence_penalty: 0.0
+    repetition_penalty: 1.3
+    enable_thinking: true
+  inference:
+    engine_type: "vllm"   # api | vllm
+    test_limit: 0
+    save_every_n_items: 10
+
+    # API 专属参数
+    api:
+      api_base_url: "http://127.0.0.1:1234/v1"
+      api_key: "sk-YyEyyAJWQVxkl7ex43515a0476Cb463aA3C35129C67e6f9e"
+      api_model_name: "google/gemma-4-e4b"
+      api_max_workers: 10
+      batch_size: 20
+
+    # vLLM 专属参数
+    vllm:
+      vllm_model_path: "../models/llms/gemma-4-31B-it"
+      vllm_gpu_memory_utilization: 0.9
+      vllm_tensor_parallel_size: 4
+      vllm_max_model_len: 40960
+      vllm_max_num_seqs: 256          # vLLM 允许的最大并发数（控制每批次处理的最大序列数）
+      vllm_enable_chunked_prefill: true

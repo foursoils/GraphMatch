@@ -1,0 +1,78 @@
+graph_match:
+
+  data:
+    train_file: "../data/minicheck/data_with_graph/gemma_26b_tk/train.parquet"
+    train_embed_file: "../data/embeddings/Qwen3-Embedding-0.6B/minicheck/gemma_26b_tk/train.pt"
+    val_file: "../data/minicheck/data_with_graph/gemma_26b_tk/val.parquet"
+    val_embed_file: "../data/embeddings/Qwen3-Embedding-0.6B/minicheck/gemma_26b_tk/val.pt"
+    data_root: "../data"
+    output_filename: "gemma3_1b.parquet"
+    datasets:
+      - AggreFact-CNN
+      - AggreFact-XSum
+      - ExpertQA
+      - summeval
+      - SCIFACT
+      - minicheck
+      - LFQA
+      - TofuEval-MediaSum
+      - WiCE
+
+  model:
+    llm_model_path: "../models/llms/gemma-3-1b-it"
+    attn_implementation: "eager"   # Macro SA bias 注入需要 eager attention
+    system_prompt_path: "../prompts/hallu_detect/system_prompt.txt"
+    embed_model_path: "../models/embeddings/Qwen3-Embedding-0.6B"
+    inject_layer: 12          # Gemma3-1B 共 26 层，约中间偏后（原 Qwen3-4B 36 层时用 18）
+    cross_attn_heads: 8       # hidden_size=1152，8 头可整除
+    max_txt_len: 2048
+    max_new_tokens: 6
+
+  gmn:
+    in_dim: 1024
+    hidden_dim: 728
+    num_layers: 3
+    dropout: 0.3
+
+  lora:
+    r: 8
+    lora_alpha: 16
+    lora_dropout: 0.15
+    target_modules:
+      - "q_proj"
+      - "k_proj"
+      - "v_proj"
+      - "o_proj"
+      - "gate_proj"
+      - "up_proj"
+      - "down_proj"
+
+  training:
+    gpu_ids: "0"
+    mixed_precision: "bf16"
+    seed: 42
+    num_epochs: 7
+    batch_size: 1
+    eval_batch_size: 16
+    grad_accum_steps: 16
+    num_workers: 2
+    lora_lr: 5.0e-6
+    graph_lr: 5.0e-5
+    aux_lambda: 0.5
+    aux_lambda_start: 0.2
+    aux_lambda_warmup_epochs: 2
+    aux_cosine_target: 0.3
+    weight_decay: 0.1
+    warmup_ratio: 0.1
+    patience: 3
+    output_dir: "../models/graph_match"
+    log_dir: "../log/graph_match"
+    val_sample: false
+    val_sample_size: 300
+    train_target: "answer_only"
+
+  infer:
+    gpu_ids: "0"
+    batch_size: 16
+    num_workers: 16
+    test_limit: 0

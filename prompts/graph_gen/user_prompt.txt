@@ -1,0 +1,4 @@
+Please extract a knowledge graph from the text provided below according to your system instructions.
+<content>
+{{content}}
+</content>

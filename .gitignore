@@ -1,0 +1,21 @@
+# Byte-compiled / optimized / DLL files
+**/__pycache__/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# PyTorch checkpoints and large binaries
+*.pt
+*.pth
+*.bin
+*.zip
+*.gz
+
+# Local model weights (downloaded pretrained models)
+models/**
+
+# Exclude all contents of the data/embeddings/ directory except the .gitkeep file
+data/embeddings/*
+!data/embeddings/.gitkeep

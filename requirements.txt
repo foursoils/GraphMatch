@@ -1,0 +1,42 @@
+# ===== 核心推理框架 =====
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+torchaudio==2.11.0+cu128
+
+# ===== 图神经网络 =====
+# 注意: torch-geometric 及其依赖需要匹配 torch 版本单独安装
+# pip install torch-scatter torch-sparse torch-geometric -f https://data.pyg.org/whl/torch-2.11.0+cu128.html
+
+# ===== LLM 推理引擎 =====
+vllm==0.20.0
+openai==2.33.0
+transformers==5.7.0
+peft==0.19.1
+accelerate==1.13.0
+tokenizers==0.22.2
+sentencepiece==0.2.1
+safetensors==0.7.0
+tiktoken==0.12.0
+
+# ===== 数据处理 =====
+numpy==2.4.4
+pandas==3.0.2
+pyarrow==24.0.0
+scipy==1.17.1
+scikit-learn==1.8.0
+
+# ===== 工具库 =====
+pyyaml==6.0.3
+tqdm==4.67.3
+requests==2.33.1
+huggingface_hub==1.12.0
+filelock==3.29.0
+regex==2026.4.4
+packaging==26.0
+
+# ===== Sentence Embedding (graph_match_nli/dataset.py) =====
+sentence-transformers==5.4.1
+
+# ===== 训练加速 =====
+# pip install flash-attn --no-build-isolation

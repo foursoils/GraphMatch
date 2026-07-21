@@ -1,0 +1,15 @@
+<doc>
+{{doc}}
+</doc>
+
+<doc_graph>
+{{doc_graph}}
+</doc_graph>
+
+<claim>
+{{claim}}
+</claim>
+
+<claim_graph>
+{{claim_graph}}
+</claim_graph>
