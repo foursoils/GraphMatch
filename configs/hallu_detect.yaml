@@ -5,7 +5,7 @@ hallu_detect:
     # 结果输出根目录（相对于项目根目录），每个数据集结果保存在各自子目录下
     output_root: "../data"
     # 自定义输出的 parquet 文件名
-    output_filename: "gemma_3_1b.parquet"
+    output_filename: "qwen3_4b.parquet"
     # 需要处理的数据集列表（与 data/ 下子目录名一致）
     datasets:
       - AggreFact-CNN
@@ -14,9 +14,9 @@ hallu_detect:
       - summeval
       - SCIFACT
       - minicheck
-      - LFQA
-      - TofuEval-MediaSum
-      - WiCE
+      # - LFQA
+      # - TofuEval-MediaSum
+      # - WiCE
 
   model:
     max_new_tokens: 2
@@ -30,7 +30,7 @@ hallu_detect:
     engine_type: "vllm" # "vllm" | "api" | "nli"
 
     # vLLM 参数（engine_type="vllm" 时生效）
-    vllm_model_path: "../models/llms/gemma-3-1b-it"
+    vllm_model_path: "../models/llms/Qwen3-4B"
     vllm_gpu_memory_utilization: 0.92
     vllm_tensor_parallel_size: 1
     vllm_max_model_len: 30000

@@ -25,7 +25,7 @@ graph_match:
     embed_model_path: "../models/embeddings/Qwen3-Embedding-0.6B"
     inject_layer: 12          # Gemma3-1B 共 26 层，约中间偏后（原 Qwen3-4B 36 层时用 18）
     cross_attn_heads: 8       # hidden_size=1152，8 头可整除
-    max_txt_len: 2048
+    max_txt_len: 30000
     max_new_tokens: 2
 
   gmn:
@@ -73,6 +73,6 @@ graph_match:
 
   infer:
     gpu_ids: "0"
-    batch_size: 16
-    num_workers: 16
+    batch_size: 24
+    num_workers: 24
     test_limit: 0

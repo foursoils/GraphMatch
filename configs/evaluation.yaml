@@ -6,7 +6,7 @@ evaluation:
   result_dirs:
     - contrast_results
     # - ablation_results
-    - our_results
+    # - our_results
 
   # 需要评估的数据集列表
   datasets:
@@ -15,7 +15,7 @@ evaluation:
       - ExpertQA
       - summeval
       - SCIFACT
-      - minicheck
+      # - minicheck
       - LFQA
       - TofuEval-MediaSum
       - WiCE
@@ -27,7 +27,8 @@ evaluation:
     # - claude_4.6_tk
     # - glm_5_tk
     # - claude_4.6_tk
-    - gemma_3_1b
+    - gemma_3_4b
+    - qwen3_4b
 
 
   # 列名配置

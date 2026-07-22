@@ -89,3 +89,7 @@ training:
 
 [4/4] 开始训练（2 epoch）
 
+
+Epoch 01 | total=1.8804  lm=1.7979  aux=0.4122
+         | val_BAcc=0.6803  parse_rate=100.00%
+  ✅ 最优模型已保存 (BAcc=0.6803)
