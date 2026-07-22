@@ -12,12 +12,12 @@ evaluation:
   datasets:
       - AggreFact-CNN
       - AggreFact-XSum
-      - ExpertQA
-      - summeval
-      - SCIFACT
-      # - minicheck
-      - LFQA
       - TofuEval-MediaSum
+      - summeval
+      # - minicheck
+      - ExpertQA
+      - LFQA
+      - SCIFACT
       - WiCE
 
   # 需要评估的模型/方法列表（对应文件名，不含 .parquet 后缀）
@@ -27,8 +27,8 @@ evaluation:
     # - claude_4.6_tk
     # - glm_5_tk
     # - claude_4.6_tk
-    - gemma_3_4b
-    - qwen3_4b
+    - gemma_3_27b
+    - qwen3_32b
 
 
   # 列名配置

@@ -8,14 +8,14 @@ graph_match:
     data_root: "../data"
     output_filename: "gemma3_1b.parquet"
     datasets:
-      # - AggreFact-CNN
-      # - AggreFact-XSum
-      - ExpertQA
-      - summeval
-      - SCIFACT
-      - minicheck
-      - LFQA
+      - AggreFact-CNN
+      - AggreFact-XSum
       - TofuEval-MediaSum
+      - summeval
+      - minicheck
+      - ExpertQA
+      - LFQA
+      - SCIFACT
       - WiCE
 
   model:
