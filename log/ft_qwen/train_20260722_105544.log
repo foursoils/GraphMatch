@@ -1,0 +1,73 @@
+[Log] 训练日志: C:\Projects\GraphMatch\log\ft_qwen\train_20260722_105544.log
+[Log] 配置文件: C:\Projects\GraphMatch\configs\ablation.yaml
+[Log] 启动时间: 2026-07-22T10:55:44
+data:
+  data_root: ../data
+  datasets:
+  - AggreFact-CNN
+  - AggreFact-XSum
+  - ExpertQA
+  - summeval
+  - SCIFACT
+  - minicheck
+  - LFQA
+  - TofuEval-MediaSum
+  - WiCE
+  output_filename: qwen3_4b_ft.parquet
+  test_file: ../data/minicheck/processed_data/test.parquet
+  train_file: ../data/minicheck/processed_data/train.parquet
+  val_file: ../data/minicheck/processed_data/val.parquet
+infer:
+  batch_size: 4
+  gpu_ids: '0'
+  num_workers: 2
+  test_limit: 0
+lora:
+  lora_alpha: 16
+  lora_dropout: 0.05
+  r: 8
+  target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+model:
+  attn_implementation: sdpa
+  llm_model_path: ../models/llms/Qwen3-4B
+  max_new_tokens: 2
+  max_txt_len: 2048
+  system_prompt_path: ../prompts/hallu_detect/system_prompt.txt
+  user_prompt_path: ../prompts/hallu_detect/user_prompt.txt
+training:
+  batch_size: 1
+  eval_batch_size: 4
+  gpu_ids: '0'
+  grad_accum_steps: 16
+  log_dir: ../log/ft_qwen
+  lr: 5.0e-06
+  mixed_precision: bf16
+  num_epochs: 1
+  num_workers: 2
+  output_dir: ../models/ft_qwen
+  patience: 3
+  seed: 42
+  val_sample: false
+  val_sample_size: 300
+  warmup_ratio: 0.1
+  weight_decay: 0.0
+
+
+[1/4] 初始化模型...
+[Init] 加载 LLM: C:\Projects\GraphMatch\models\llms\Qwen3-4B (device_map={'': 0})
+[Init] LoRA 已应用到全部目标模块。
+[Init] LoraHalluModel 就绪。
+可训练参数: 5,898,240 / 全部参数: 4,028,366,336 (0.15%)
+
+[2/4] 构建数据集...
+[Dataset] 加载数据: C:\Projects\GraphMatch\data\minicheck\processed_data\train.parquet
+[Dataset] 加载数据: C:\Projects\GraphMatch\data\minicheck\processed_data\val.parquet
+
+[3/4] 优化器与调度器...
+
+[4/4] 开始训练（1 epoch）
+

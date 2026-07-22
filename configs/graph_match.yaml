@@ -8,8 +8,8 @@ graph_match:
     data_root: "../data"
     output_filename: "gemma3_1b.parquet"
     datasets:
-      - AggreFact-CNN
-      - AggreFact-XSum
+      # - AggreFact-CNN
+      # - AggreFact-XSum
       - ExpertQA
       - summeval
       - SCIFACT
@@ -73,6 +73,6 @@ graph_match:
 
   infer:
     gpu_ids: "0"
-    batch_size: 24
-    num_workers: 24
+    batch_size: 1
+    num_workers: 1
     test_limit: 0

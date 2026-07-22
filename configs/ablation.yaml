@@ -104,55 +104,67 @@ ablation:
       test_limit: 0          # 测试模式：只处理前 N 条，0 表示全量
 
   # ===========================================================================
-  # nli_ft 消融：纯文本 NLI 微调（w/o graph），对齐 graph_match_nli 数据与超参
-  # 训练：ablation/nli_ft/train.py
-  # 推理：ablation/nli_ft/evaluate.py
-  # 结果写入各数据集 data/<name>/ablation_results/
+  # ft 消融实验：纯文本 LoRA 微调 Qwen3-4B（无图），作为 GraphMatch 文本基线
+  # 训练入口：ablation/ft/train.py
+  # 推理入口：ablation/ft/evaluate.py
   # ===========================================================================
-  nli_ft:
+  ft:
     data:
-      train_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/train.parquet"
-      val_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/val.parquet"
-      test_parquet: "../data/minicheck/data_with_graph/gemma_26b_tk/test.parquet"
+      train_file: "../data/minicheck/processed_data/train.parquet"
+      val_file: "../data/minicheck/processed_data/val.parquet"
+      test_file: "../data/minicheck/processed_data/test.parquet"
       data_root: "../data"
-      # 与 graph_match 的 our_results 区分，写入 ablation_results
-      output_filename: "deberta_v3_large_ft.parquet"
+      output_filename: "qwen3_4b_ft.parquet"
       datasets:
         - AggreFact-CNN
         - AggreFact-XSum
         - ExpertQA
+        - summeval
         - SCIFACT
-        - Reveal
-        - WiCE
+        - minicheck
         - LFQA
         - TofuEval-MediaSum
-        - minicheck
+        - WiCE
 
     model:
-      # MoritzLaurer/DeBERTa-v3-large-mnli-fever-anli-ling-wanli（3-class NLI）
-      nli_model_path: "../models/nlis/deberta-v3-large"
-      max_length: 512
-      device: "cuda"
-      # 冻结前 N 层 encoder（与 graph_match_nli 对齐，便于公平对比）
-      freeze_nli_layers: 12
+      llm_model_path: "../models/llms/Qwen3-4B"
+      attn_implementation: "sdpa"
+      system_prompt_path: "../prompts/hallu_detect/system_prompt.txt"
+      user_prompt_path: "../prompts/hallu_detect/user_prompt.txt"
+      max_txt_len: 2048
+      max_new_tokens: 2
 
-    inference:
-      chunked: true
-      chunk_size: 400
-      chunk_batch_size: 12
+    lora:
+      r: 8
+      lora_alpha: 16
+      lora_dropout: 0.05
+      target_modules:
+        - "q_proj"
+        - "k_proj"
+        - "v_proj"
+        - "o_proj"
 
     training:
-      batch_size: 4
-      val_batch_size: 16
-      test_batch_size: 24
-      accum_steps: 4
-      tensor_parallel_size: 1
-      learning_rate: 0.000005
-      encoder_lr_ratio: 2       # encoder LR = learning_rate × ratio
-      weight_decay: 0.05
-      label_smoothing: 0.05
-      warmup_ratio: 0.1
-      num_epochs: 1
-      patience: 2
-      best_f1_path: "../models/nli_ft/best_f1.pt"
+      gpu_ids: "0"
+      mixed_precision: "bf16"
       seed: 42
+      num_epochs: 1
+      batch_size: 1
+      eval_batch_size: 4
+      grad_accum_steps: 16
+      num_workers: 2
+      lr: 5.0e-6
+      weight_decay: 0.0
+      warmup_ratio: 0.1
+      patience: 3
+      output_dir: "../models/ft_qwen"
+      log_dir: "../log/ft_qwen"
+      val_sample: false
+      val_sample_size: 300
+
+    infer:
+      gpu_ids: "0"
+      batch_size: 4
+      num_workers: 2
+      test_limit: 0
+
