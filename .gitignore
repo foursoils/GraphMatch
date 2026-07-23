@@ -16,6 +16,10 @@
 # Local model weights (downloaded pretrained models)
 models/**
 
+# Training / runtime logs
+log/
+
 # Exclude all contents of the data/embeddings/ directory except the .gitkeep file
 data/embeddings/*
 !data/embeddings/.gitkeep
+

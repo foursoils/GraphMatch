@@ -5,20 +5,20 @@ evaluation:
   # 结果子目录，可以是单个字符串或列表（例如 contrast_results, ablation_results）
   result_dirs:
     - contrast_results
-    # - ablation_results
+    - ablation_results
     # - our_results
 
   # 需要评估的数据集列表
   datasets:
-      - AggreFact-CNN
-      - AggreFact-XSum
-      - TofuEval-MediaSum
-      - summeval
-      # - minicheck
-      - ExpertQA
-      - LFQA
-      - SCIFACT
-      - WiCE
+    - AggreFact-CNN
+    - AggreFact-XSum
+    - TofuEval-MediaSum
+    - summeval
+    # - minicheck
+    - ExpertQA
+    - LFQA
+    - SCIFACT
+    - WiCE
 
   # 需要评估的模型/方法列表（对应文件名，不含 .parquet 后缀）
   models:
@@ -27,9 +27,10 @@ evaluation:
     # - claude_4.6_tk
     # - glm_5_tk
     # - claude_4.6_tk
-    - gemma_3_27b
-    - qwen3_32b
-
+    # - gemma_3_27b
+    - qwen3_4b
+    - qwen3_4b_ft
+    - qwen3_4b_kg
 
   # 列名配置
   columns:

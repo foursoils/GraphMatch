@@ -71,3 +71,10 @@ training:
 
 [4/4] 开始训练（1 epoch）
 
+
+Epoch 01 | train_loss=1.2628
+         | val_BAcc=0.7657  parse_rate=100.00%
+  最优模型已保存 (BAcc=0.7657)
+
+训练完成！最优 val_BAcc=0.7657
+检查点: C:\Projects\GraphMatch\models\ft_qwen\best_model.pt
