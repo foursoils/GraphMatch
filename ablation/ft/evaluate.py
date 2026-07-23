@@ -27,27 +27,40 @@ from utils.path_utils import configure_dist_process_logging, is_rank0, log_rank0
 
 
 def _verify_lora_loaded(model, lora_dir: str) -> bool:
+    """抽样比对 adapter 与模型中同名且同 shape 的 LoRA 权重。失败只返回 False，不抛异常。"""
     from peft import PeftModel
     from safetensors import safe_open
 
-    if not isinstance(model.llm, PeftModel):
-        return False
-    adapter_path = os.path.join(lora_dir, 'adapter_model.safetensors')
-    if not os.path.exists(adapter_path):
-        return False
-    with safe_open(adapter_path, framework='pt') as f:
-        saved_keys = [k for k in f.keys() if k.endswith('.lora_A.weight')]
-        if not saved_keys:
+    try:
+        if not isinstance(model.llm, PeftModel):
             return False
-        saved_key, saved = saved_keys[0], f.get_tensor(saved_keys[0])
-    suffix = saved_key.split('layers.', 1)[-1] if 'layers.' in saved_key else saved_key
-    model_keys = [
-        k for k in model.llm.state_dict()
-        if k.endswith(suffix) or k.endswith(suffix.replace('.weight', '.default.weight'))
-    ]
-    if not model_keys:
+        adapter_path = os.path.join(lora_dir, 'adapter_model.safetensors')
+        if not os.path.exists(adapter_path):
+            return False
+        with safe_open(adapter_path, framework='pt') as f:
+            saved_keys = [k for k in f.keys() if k.endswith('.lora_A.weight')]
+            if not saved_keys:
+                return False
+            saved_key = saved_keys[0]
+            saved = f.get_tensor(saved_key)
+
+        state = model.llm.state_dict()
+        # 优先精确 key；否则按 suffix 匹配，并要求 shape 一致（避免 Gemma 多模态误命中 vision 层）
+        candidates = []
+        if saved_key in state:
+            candidates.append(saved_key)
+        suffix = saved_key.split('layers.', 1)[-1] if 'layers.' in saved_key else saved_key
+        alt_suffix = suffix.replace('.weight', '.default.weight')
+        for k, v in state.items():
+            if k.endswith(suffix) or k.endswith(alt_suffix):
+                if tuple(v.shape) == tuple(saved.shape):
+                    candidates.append(k)
+        if not candidates:
+            return False
+        return torch.allclose(state[candidates[0]].cpu().float(), saved.float(), atol=1e-5)
+    except Exception as e:
+        log_rank0(f"[Warn] LoRA 校验异常（已忽略）: {e}")
         return False
-    return torch.allclose(model.llm.state_dict()[model_keys[0]].cpu().float(), saved.float(), atol=1e-5)
 
 
 def load_lora(model: LoraHalluModel, output_dir: str):

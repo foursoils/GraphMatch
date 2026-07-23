@@ -11,7 +11,7 @@ ablation:
       # 结果输出根目录（相对于项目根目录），各数据集结果保存在各自子目录下
       output_root: "../data"
       # 输出 parquet 文件名
-      output_filename: "qwen3_4b_kg.parquet"
+      output_filename: "gemma_3_4b_kg.parquet"
       # 需要处理的数据集列表（与 data/ 下子目录名一致）
       datasets:
         - AggreFact-CNN
@@ -34,7 +34,7 @@ ablation:
 
     inference:
       # vLLM 参数
-      vllm_model_path: "../models/llms/Qwen3-4B"
+      vllm_model_path: "../models/llms/gemma-3-4b-it"
       vllm_gpu_memory_utilization: 0.92
       vllm_tensor_parallel_size: 1
       vllm_max_model_len: 30000
@@ -114,20 +114,20 @@ ablation:
       val_file: "../data/minicheck/processed_data/val.parquet"
       test_file: "../data/minicheck/processed_data/test.parquet"
       data_root: "../data"
-      output_filename: "qwen3_4b_ft.parquet"
+      output_filename: "gemma_3_4b_ft.parquet"
       datasets:
-        # - AggreFact-CNN
-        # - AggreFact-XSum
-        # - TofuEval-MediaSum
-        # - summeval
-        # - minicheck
-        # - ExpertQA
+        - AggreFact-CNN
+        - AggreFact-XSum
+        - TofuEval-MediaSum
+        - summeval
+        - minicheck
+        - ExpertQA
         - LFQA
         - SCIFACT
         - WiCE
 
     model:
-      llm_model_path: "../models/llms/Qwen3-4B"
+      llm_model_path: "../models/llms/gemma-3-4b-it"
       attn_implementation: "sdpa"
       system_prompt_path: "../prompts/hallu_detect/system_prompt.txt"
       user_prompt_path: "../prompts/hallu_detect/user_prompt.txt"
@@ -157,14 +157,14 @@ ablation:
       weight_decay: 0.0
       warmup_ratio: 0.1
       patience: 3
-      output_dir: "../models/ft_qwen"
-      log_dir: "../log/ft_qwen"
+      output_dir: "../models/ft_gemma"
+      log_dir: "../log/ft_gemma"
       val_sample: false
       val_sample_size: 300
 
     infer:
       gpu_ids: "0"
-      batch_size: 6
-      num_workers: 6
+      batch_size: 1
+      num_workers: 1
       test_limit: 0
 
